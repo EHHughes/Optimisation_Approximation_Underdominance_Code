@@ -1,0 +1,2 @@
+conversion_rate,wg_a_fac,wg_alpha_fac,wg_beta_fac,wg_g_fac,gg_a_fac,gg_alpha_fac,gg_beta_fac,gg_g_fac,f_1 (low g frequency),f_2 (high g frequency),f_1 (low g frequency) [verified mean],f_2 (high g frequency) [verified mean],f_1 (low g frequency) [verified var],f_2 (high g frequency) [verified var]
+0.0,0.8276149785972594,0.0,0.0,0.430986890139043,0.8569254463857775,0.8771413019387684,0.48568994654041886,1.0,1.0,1.0,0.8870641793770583,0.9899025974025975,0.0032240927228906467,4.8390274498229054e-05

@@ -1,0 +1,52 @@
+# Installs the dependencies and runs the test suite, as a check that the frozen
+# reference code still builds and passes from a clean checkout.
+# For more information see:
+# https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Python package
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+    # The trained surrogates are git-LFS objects, and the surrogate tests load
+    # them, so the checkout must materialise them rather than leave pointers.
+    - uses: actions/checkout@v7
+      with:
+        lfs: true
+    - name: Set up Python ${{ matrix.python-version }}
+      id: setup-python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Cache virtualenv
+      id: cache-venv
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+    - name: Install dependencies
+      if: steps.cache-venv.outputs.cache-hit != 'true'
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --upgrade pip
+        .venv/bin/pip install -r requirements.txt
+    - name: Install package
+      run: .venv/bin/pip install -e .
+    - name: Test with pytest
+      # Run the FULL suite, including tests marked `slow` (e.g. the end-to-end
+      # Ray Tune integration). The `slow` marker is only for skipping locally;
+      # do NOT add `-m "not slow"` here or CI coverage drops silently.
+      run: .venv/bin/pytest

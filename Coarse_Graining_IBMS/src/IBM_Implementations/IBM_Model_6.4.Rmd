@@ -1,0 +1,1141 @@
+---
+title: "IBM Model Simulation"
+output: html_document
+params:
+  temperature: 20
+  competition: "INTERFERENCE"     # EXPLOITATION or INTERFERENCE
+  initial_food_val: 2700          # will be multiplied inside Rmd
+  refill_food_val: 75           # will be multiplied inside Rmd
+  density_level: 1.4              # larval_density_per_cell = density_level * V_cell
+  seed: 1234
+    
+  run_name: "TEST_RUN"   # placeholder
+  out_dir: "csv_out"     # placeholder
+---
+
+
+```{r}
+library(deSolve)
+library(ggplot2)
+library(reshape2)
+library(SyncRNG)
+source("sync_rng_random_functions.r")
+USE_SYNCRNG <- TRUE # turns on python and R rng synchronisation
+if (USE_SYNCRNG) {
+  s <- SyncRNG(seed = 1234)
+}
+options(digits = 12)
+
+
+# ----------------------------------------------------------------------------
+# 0) Constants (must appear BEFORE params, and contain NO hard-coded overriders)
+# ----------------------------------------------------------------------------
+map_size      <- 20
+time_steps    <- 300
+cycles        <- 2
+Rth           <- 15
+sigma         <- 23
+Rpup          <- 87.9
+W0            <- 4.1
+R0            <- 0.4 * W0
+eggs_count    <- 790
+pup_delay     <- 37.5
+assimilation_eff <- 0.25
+E_f <- 30
+V_cell <- 5
+N_WINNERS <- 4   # used only for interference
+
+# ----------------------------------------------------------------------------
+# PARAMETERS FROM YAML / LAUNCHER
+# ----------------------------------------------------------------------------
+temperature       <- params$temperature
+competition       <- params$competition
+initial_food_val  <- params$initial_food_val
+refill_food_val   <- params$refill_food_val
+density_level     <- params$density_level
+set.seed(params$seed)
+
+# Density scaling
+larval_density_per_cell <- density_level * V_cell
+
+# Food scaled by density
+if (competition == "INTERFERENCE") {
+    initial_food  <- initial_food_val  * N_WINNERS
+    refill_amount <- refill_food_val   * N_WINNERS
+} else {
+    initial_food  <- initial_food_val  * larval_density_per_cell
+    refill_amount <- refill_food_val   * larval_density_per_cell
+}
+
+# Carrying capacity (now safe: map_size is defined above)
+K_L <- larval_density_per_cell * map_size^2
+
+# Competition modes
+USE_EXPLOITATION <- (competition == "EXPLOITATION")
+USE_INTERFERENCE <- (competition == "INTERFERENCE")
+if (USE_EXPLOITATION == USE_INTERFERENCE) stop("Competition mode error")
+
+# Debug output
+cat("\n--- PARAMETERS ---\n")
+cat("Temperature:", temperature, "\n")
+cat("Competition:", competition, "\n")
+cat("Initial food:", initial_food, "(base", initial_food_val, ")\n")
+cat("Refill amount:", refill_amount, "(base", refill_food_val, ")\n")
+cat("Density level:", density_level, "Actual:", larval_density_per_cell, "\n")
+cat("K_L:", K_L, "\n")
+cat("Seed:", params$seed, "\n\n")
+
+
+# ----------------------------------------------------------------------------
+# 1) RDG: Discrete temperature-specific parameters and CIs
+# ----------------------------------------------------------------------------
+all_temps <- list(
+  "20" = list(
+    a = 0.16,
+    c = 0.046,
+    alpha = 0.73,
+    beta = 0.36,
+    g = 0.23
+  ),
+  "22" = list(
+    a = 0.18,
+    c = 0.033,
+    alpha = 0.81,
+    beta = 0.54,
+    g = 0.34
+  ),
+  "24" = list(
+    a = 0.15,
+    c = 0.035,
+    alpha = 0.96,
+    beta = 0.58,
+    g = 0.40
+  ),
+  "26" = list(
+    a = 0.15,
+    c = 0.041,
+    alpha = 1.01,
+    beta = 0.50,
+    g = 0.44
+  ),
+  "28" = list(
+    a = 0.25,
+    c = 0.052,
+    alpha = 0.81,
+    beta = 0.50,
+    g = 0.52
+  ),
+  "30" = list(
+    a = 0.31,
+    c = 0.069,
+    alpha = 0.80,
+    beta = 0.52,
+    g = 0.59
+  )
+)
+
+param_CI <- list(
+  "20" = list(
+    a = c(0.13, 0.18),
+    alpha = c(0.71, 0.75),
+    beta = c(0.34, 0.38),
+    g = c(0.22, 0.24)
+  ),
+  "22" = list(
+    a = c(0.18, 0.19),
+    alpha = c(0.79, 0.83),
+    beta = c(0.53, 0.55),
+    g = c(0.32, 0.35)
+  ),
+  "24" = list(
+    a = c(0.15, 0.16),
+    alpha = c(0.94, 0.98),
+    beta = c(0.57, 0.59),
+    g = c(0.39, 0.41)
+  ),
+  "26" = list(
+    a = c(0.14, 0.16),
+    alpha = c(0.99, 1.03),
+    beta = c(0.50, 0.51),
+    g = c(0.43, 0.46)
+  ),
+  "28" = list(
+    a = c(0.21, 0.26),
+    alpha = c(0.79, 0.83),
+    beta = c(0.49, 0.50),
+    g = c(0.50, 0.53)
+  ),
+  "30" = list(
+    a = c(0.28, 0.33),
+    alpha = c(0.78, 0.82),
+    beta = c(0.51, 0.52),
+    g = c(0.57, 0.61)
+  )
+)
+
+# Helper: get parameter set for discrete temp
+get_params <- function(temp) {
+  t_str <- as.character(round(temp))
+  if (!(t_str %in% names(all_temps)))
+    stop("Temperature not in discrete set (20-30 °C).")
+  all_temps[[t_str]]
+}
+
+# Helper: random personalisation within CI
+get_randomised_params <- function(temp) {
+  t_str <- as.character(round(temp))
+  base <- all_temps[[t_str]]
+  ci   <- param_CI[[t_str]]
+  
+  # sample uniformly within each CI range
+  if (USE_SYNCRNG) {
+    personalised <- list(
+      a     = sync_rng_uniform(ci$a[1], ci$a[2], as.integer(1), s),
+      c     = base$c,
+      # no CI given, so keep fixed
+      alpha = sync_rng_uniform(ci$alpha[1], ci$alpha[2], as.integer(1), s),
+      beta  = sync_rng_uniform(ci$beta[1], ci$beta[2], as.integer(1), s),
+      g     = sync_rng_uniform(ci$g[1], ci$g[2], as.integer(1), s)
+    )
+    personalised
+  } else {
+  personalised <- list(
+    a     = runif(1, ci$a[1], ci$a[2]),
+    c     = base$c,
+    # no CI given, so keep fixed
+    alpha = runif(1, ci$alpha[1], ci$alpha[2]),
+    beta  = runif(1, ci$beta[1], ci$beta[2]),
+    g     = runif(1, ci$g[1], ci$g[2])
+  )
+  personalised
+  }
+}
+
+# ----------------------------------------------------------------------------
+# 2) RDG ODE (inner model; DO NOT CHANGE)
+# ----------------------------------------------------------------------------
+rdg_model <- function(t, state, pars) {
+  W <- state[1]
+  R <- state[2]
+  
+  # Use FA_actual if provided, otherwise compute physiologically
+  if (!is.null(pars$FA_actual)) {
+    FA <- pars$FA_actual
+  } else {
+    FA <- pars$g * W * exp(-((R - pars$Rth)^2) / (2 * pars$sigma^2))
+  }
+  
+  M <- pars$c * W^pars$beta
+  
+  if (FA < M) {
+    dW <- 0
+    dR <- FA - M
+  } else {
+    surplus <- FA - M
+    dR <- pars$a * surplus^pars$alpha
+    dW <- surplus - dR
+  }
+  
+  list(c(dW, dR))
+}
+
+
+
+# ----------------------------------------------------------------------------
+# 3) IBM Helpers: survival, temperature update
+# ----------------------------------------------------------------------------
+survival_rates <- function(stage, temperature) {
+  if (stage == 1)
+    return(ifelse(temperature >= 20 & temperature <= 30, 0.9, 0))
+  if (stage == 3)
+    return(1.0)
+  return(1)
+}
+
+update_temperature <- function(temp)
+  temp
+
+
+# ----------------------------------------------------------------------------
+# 4) Initialisation
+# ----------------------------------------------------------------------------
+stage_pop <- matrix(NA,
+                    nrow = cycles,
+                    ncol = 4,
+                    dimnames = list(NULL, c("Eggs", "Larvae", "Pupae", "Adults")))
+
+pupated_all     <- vector("list", cycles)
+deceased_all    <- vector("list", cycles)
+temperature_matrix <- matrix(NA, nrow = cycles, ncol = time_steps)
+food_matrix        <- matrix(NA, nrow = cycles, ncol = time_steps)
+W_matrix           <- matrix(NA, nrow = cycles, ncol = time_steps)
+R_matrix           <- matrix(NA, nrow = cycles, ncol = time_steps)
+
+pupation_stats <- data.frame(
+  Cycle = integer(),
+  PupationTimeMean = numeric(),
+  PupationTimeMedian = numeric(),
+  PupationMassMean = numeric(),
+  PupationMassMedian = numeric(),
+  NonPupatedMassMean = numeric(),
+  NonPupatedMassMedian = numeric(),
+  DeadMassMean = numeric(),
+  DeadMassMedian = numeric(),
+  EndFoodLevel = numeric()
+)
+
+# For survival tracking
+prev_larvae_count <- NA
+
+# ----------------------------------------------------------------------------
+# 5) Life-Cycle Loop (Optimised)
+# ----------------------------------------------------------------------------
+lts_size <- cycles * time_steps
+lts_Cycle     <- integer(lts_size)
+lts_Hour      <- integer(lts_size)
+lts_LarvaeCnt <- integer(lts_size)
+lts_Survival  <- numeric(lts_size)
+lts_Commit    <- integer(lts_size)
+lts_Pupated   <- integer(lts_size)
+lts_Deaths    <- integer(lts_size)
+lts_i <- 1L
+lts_ReserveMean   <- numeric(lts_size)
+lts_ReserveMedian <- numeric(lts_size)
+lts_ReserveMin    <- numeric(lts_size)
+lts_ReserveMax    <- numeric(lts_size)
+lts_MassMean      <- numeric(lts_size)
+lts_MassMedian    <- numeric(lts_size)
+lts_MassMin       <- numeric(lts_size)
+lts_MassMax       <- numeric(lts_size)
+lts_OccupiedCells     <- integer(lts_size)
+lts_MeanLarvaePerCell <- numeric(lts_size)
+lts_MeanFoodPerCell   <- numeric(lts_size)
+lts_FAperCell <- numeric(lts_size)
+
+
+
+
+
+for (cycle in 1:cycles) {
+  cycle_start <- (cycle - 1) * (time_steps + 10) # 10 being a buffer gap between cycles
+  grid_food   <- matrix(initial_food, nrow = map_size, ncol = map_size)
+  stage_pop[cycle, "Eggs"] <- eggs_count
+  larvae_survived <- floor(eggs_count * survival_rates(1, temperature))
+  stage_pop[cycle, "Larvae"] <- larvae_survived
+  
+  # --- Initialise larvae as numeric vectors ---
+  if (larvae_survived > 0) {
+    W <- rep(W0, larvae_survived)
+    R <- rep(R0, larvae_survived)
+    if (USE_SYNCRNG) {
+      x <- sync_rng_choice(1:map_size, larvae_survived, s, TRUE)
+      y <- sync_rng_choice(1:map_size, larvae_survived, s, TRUE)
+    } else {
+      x <- sample(1:map_size, larvae_survived, TRUE)
+      y <- sample(1:map_size, larvae_survived, TRUE)
+    }
+    pupate_at <- rep(NA_real_, larvae_survived)
+    a_fac <- alpha_fac <- beta_fac <- g_fac <- numeric(larvae_survived)
+    
+    base_par <- get_params(temperature)
+    for (i in seq_len(larvae_survived)) {
+      p_i <- get_randomised_params(temperature)
+      a_fac[i]     <- p_i$a / base_par$a
+      alpha_fac[i] <- p_i$alpha / base_par$alpha
+      beta_fac[i]  <- p_i$beta / base_par$beta
+      g_fac[i]     <- p_i$g / base_par$g
+    }
+  } else {
+    W <- R <- x <- y <- pupate_at <- a_fac <- alpha_fac <- beta_fac <- g_fac <- numeric(0)
+  }
+  
+  pupae_count <- 0L
+  temperature_record <- numeric(time_steps)
+  pupated_buffer <- list()
+  deceased_buffer <- list()
+  
+  for (hour in 1:time_steps) {
+    t_global <- cycle_start + hour
+    if (hour %% 24 == 0)
+      grid_food <- grid_food + refill_amount
+    #temperature <- update_temperature(temperature)
+    #temperature <- pmin(pmax(temperature, 20), 30)
+    #temperature_record[hour] <- temperature
+    food_matrix[cycle, hour] <- sum(grid_food)
+    
+    # --- Movement ---
+    if (length(W) > 0) {
+      move_d <- c(-1,0,1)
+      if (USE_SYNCRNG) {
+        x <- (x + sync_rng_choice(move_d, length(x), s, TRUE) - 1) %% map_size + 1
+        y <- (y + sync_rng_choice(move_d, length(y), s, TRUE) - 1) %% map_size + 1
+      } else {
+        x <- (x + sample(move_d, length(x), TRUE) - 1) %% map_size + 1
+        y <- (y + sample(move_d, length(y), TRUE) - 1) %% map_size + 1
+      }
+    }
+    
+    p_base <- get_params(temperature)
+    current_larvae <- length(W)
+    FA_demand <- numeric(current_larvae)
+    food_mean_cell <- sum(grid_food) / (map_size^2)
+    occupied_cells <- if (current_larvae > 0)
+      length(unique((x - 1) * map_size + y))
+    else
+      0
+    mean_larvae_per_cell <- if (occupied_cells > 0)
+      current_larvae / occupied_cells
+    else
+      NA
+    # --- Reserve / mass stats ---
+    reserve_mean <- reserve_median <- reserve_min <- reserve_max <- NA
+    mass_mean <- mass_median <- mass_min <- mass_max <- NA
+    if (current_larvae > 0) {
+      reserve_mean   <- mean(R)
+      reserve_median <- median(R)
+      reserve_min    <- min(R)
+      reserve_max    <- max(R)
+      mass_mean      <- mean(W)
+      mass_median    <- median(W)
+      mass_min       <- min(W)
+      mass_max       <- max(W)
+    }
+    lts_ReserveMean[lts_i]   <- reserve_mean
+    lts_ReserveMedian[lts_i] <- reserve_median
+    lts_ReserveMin[lts_i]    <- reserve_min
+    lts_ReserveMax[lts_i]    <- reserve_max
+    
+    lts_MassMean[lts_i]      <- mass_mean
+    lts_MassMedian[lts_i]    <- mass_median
+    lts_MassMin[lts_i]       <- mass_min
+    lts_MassMax[lts_i]       <- mass_max
+    
+    
+    death_count <- 0L
+    pupated_now <- 0L
+    FA_actual <- numeric(current_larvae)
+    lts_OccupiedCells[lts_i]     <- occupied_cells
+    lts_MeanLarvaePerCell[lts_i] <- mean_larvae_per_cell
+    lts_MeanFoodPerCell[lts_i]   <- food_mean_cell
+    
+    
+    # ------------------------------------------------------------------------
+    #   Resource allocation by cell (integer cell_id)
+    # ------------------------------------------------------------------------
+    if (current_larvae > 0) {
+      cell_id <- (x - 1) * map_size + y
+      occupied <- unique(cell_id)
+      
+      for (cid in occupied) {
+        in_cell <- which(cell_id == cid)
+        cx <- ((cid - 1) %/% map_size) + 1
+        cy <- ((cid - 1) %%  map_size) + 1
+        pool <- grid_food[cx, cy]
+        
+        if (length(in_cell) == 0)
+          next
+        
+        if (USE_EXPLOITATION) {
+          g_rate_vec <- p_base$g * g_fac[in_cell]
+          FA_desired_vec <- g_rate_vec * W[in_cell] *
+            exp(-((R[in_cell] - Rth)^2) / (2 * sigma^2))
+          FA_demand[in_cell] <- FA_desired_vec
+          eff_vec <- rep(assimilation_eff, length(in_cell))
+          eff_vec[eff_vec <= 0 | is.na(eff_vec)] <- 1e-9
+          
+          req_vec <- FA_desired_vec / eff_vec
+          total_req <- sum(req_vec)
+          
+          if (total_req <= 1e-4 || all(FA_desired_vec <= 0)) {
+            next
+          }
+          
+          if (total_req <= pool) {
+            FA_actual[in_cell] <- FA_desired_vec
+          } else {
+            prop <- req_vec / total_req
+            pool_share <- pool * prop
+            FA_actual[in_cell] <- pmin(pool_share * eff_vec, FA_desired_vec)
+          }
+          
+          grid_food[cx, cy] <- max(0, pool - sum(FA_actual[in_cell] / eff_vec))
+        } else if (USE_INTERFERENCE) {
+  # ------------------------------------------------------------
+  # INTERFERENCE: minimal, non-invasive fix — keep rules identical
+  # ------------------------------------------------------------
+  if (length(in_cell) > N_WINNERS) {
+    # weighted by body mass
+    weights <- W[in_cell]
+    prob    <- weights / sum(weights)
+    if (USE_SYNCRNG) {
+      winners_local <- sync_rng_choice(
+        in_cell,
+        size = N_WINNERS,
+        s = s,
+        replace = FALSE,
+        weights = prob)
+    } else {
+      winners_local <- sample(
+        in_cell,
+        size = N_WINNERS,
+        prob = prob,
+        replace = FALSE)
+    }
+  } else {
+    winners_local <- in_cell
+  }
+  # ensure losers have zero assimilation this hour
+  non_winners <- setdiff(in_cell, winners_local)
+  if (length(non_winners) > 0) FA_actual[non_winners] <- 0
+
+  # heavier feed first (preserve original behaviour)
+  winners_local <- winners_local[order(W[winners_local], decreasing = TRUE)]
+
+  # use personalised g_fac like in exploitation
+  g_rate_vec <- p_base$g * g_fac[winners_local]
+
+  # per-winner desired FA and bookkeeping
+  FA_desired_vec <- g_rate_vec * W[winners_local] *
+    exp(-((R[winners_local] - Rth)^2) / (2 * sigma^2))
+
+  FA_demand[winners_local] <- FA_desired_vec
+
+  # assimilation vector (consistent numerics)
+  eff_vec <- rep(assimilation_eff, length(winners_local))
+  eff_vec[eff_vec <= 0 | is.na(eff_vec)] <- 1e-9
+
+  # feeding loop: preserve "all-or-nothing" (no partial feeding) behaviour
+  for (k in seq_along(winners_local)) {
+    id <- winners_local[k]
+    required_from_pool <- FA_desired_vec[k] / eff_vec[k]
+    if (pool >= required_from_pool) {
+      FA_actual[id] <- FA_desired_vec[k]
+      pool <- pool - required_from_pool
+    } else {
+      break  # preserve original behaviour: do not partially feed the next winner
+    }
+  }
+
+  # --- CRITICAL: write updated pool back into the grid (fix) ---
+  grid_food[cx, cy] <- max(0, pool)
+}
+
+        
+      } # end for each occupied cell
+    }
+    
+        if (current_larvae > 0) {
+      total_FA <- sum(FA_demand)
+      lts_FAperCell[lts_i] <- total_FA / (map_size^2)
+    } else {
+      lts_FAperCell[lts_i] <- 0
+    }
+    
+    
+    # ------------------------------------------------------------------------
+    #   Growth / reserve update (vectorised where possible)
+    # ------------------------------------------------------------------------
+    if (current_larvae > 0) {
+      to_die <- logical(current_larvae)
+      for (i in seq_len(current_larvae)) {
+        pars <- list(
+          a = p_base$a * a_fac[i],
+          c = p_base$c,
+          alpha = p_base$alpha * alpha_fac[i],
+          beta = p_base$beta  * beta_fac[i],
+          g = p_base$g * g_fac[i],
+          FA_actual = FA_actual[i]
+        )
+        state <- c(W[i], R[i])
+        k1 <- rdg_model(0, state, pars)[[1]]
+        k2 <- rdg_model(0, state + 0.5 * k1, pars)[[1]]
+        k3 <- rdg_model(0, state + 0.5 * k2, pars)[[1]]
+        k4 <- rdg_model(0, state + k3, pars)[[1]]
+        delta <- (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        W[i] <- W[i] + delta[1]
+        R[i] <- R[i] + delta[2]
+        if (R[i] < 0)
+          to_die[i] <- TRUE
+        if (is.na(pupate_at[i]) && R[i] >= Rpup)
+          pupate_at[i] <- t_global + pup_delay
+      }
+      
+      
+      # --- Batch removals ---
+      if (any(to_die)) {
+        deceased_buffer[[length(deceased_buffer) + 1]] <-
+          data.frame(
+            W = W[to_die],
+            R = R[to_die],
+            x = x[to_die],
+            y = y[to_die]
+          )
+        death_count <- sum(to_die)
+        keep <- !to_die
+        W <- W[keep]
+        R <- R[keep]
+        x <- x[keep]
+        y <- y[keep]
+        a_fac <- a_fac[keep]
+        alpha_fac <- alpha_fac[keep]
+        beta_fac <- beta_fac[keep]
+        g_fac <- g_fac[keep]
+        pupate_at <- pupate_at[keep]
+        FA_actual <- FA_actual[keep]
+      }
+      
+      to_pup <- which(!is.na(pupate_at) & pupate_at <= t_global)
+      if (length(to_pup) > 0) {
+        pupated_buffer[[length(pupated_buffer) + 1]] <-
+          data.frame(
+            W = W[to_pup],
+            R = R[to_pup],
+            x = x[to_pup],
+            y = y[to_pup]
+          )
+        pupated_now <- length(to_pup)
+        pupae_count <- pupae_count + pupated_now
+        keep <- !(seq_along(W) %in% to_pup)
+        W <- W[keep]
+        R <- R[keep]
+        x <- x[keep]
+        y <- y[keep]
+        a_fac <- a_fac[keep]
+        alpha_fac <- alpha_fac[keep]
+        beta_fac <- beta_fac[keep]
+        g_fac <- g_fac[keep]
+        pupate_at <- pupate_at[keep]
+        FA_actual <- FA_actual[keep]
+      }
+    }
+    
+    # ------------------------------------------------------------------------
+    #   Record statistics (preallocated vectors)
+    # ------------------------------------------------------------------------
+    W_matrix[cycle, hour] <- ifelse(length(W) > 0, mean(W), NA)
+    R_matrix[cycle, hour] <- ifelse(length(R) > 0, mean(R), NA)
+    survival_rate <- if (!is.na(prev_larvae_count) &&
+                         prev_larvae_count > 0)
+      current_larvae / prev_larvae_count
+    else
+      NA
+    prev_larvae_count <- current_larvae
+    
+    lts_Cycle[lts_i]     <- cycle
+    lts_Hour[lts_i]      <- hour
+    lts_LarvaeCnt[lts_i] <- current_larvae
+    lts_Survival[lts_i]  <- survival_rate
+    lts_Commit[lts_i]    <- sum(!is.na(pupate_at) &
+                                  pupate_at == t_global + pup_delay)
+    lts_Pupated[lts_i]   <- pupated_now
+    lts_Deaths[lts_i]    <- death_count
+    lts_i <- lts_i + 1L
+  } # end hour loop
+  
+  # --------------------------------------------------------------------------
+  #   Aggregate per cycle
+  # --------------------------------------------------------------------------
+  pupated_all[[cycle]] <- if (length(pupated_buffer) > 0)
+    do.call(rbind, pupated_buffer)
+  else
+    data.frame()
+  deceased_all[[cycle]] <- if (length(deceased_buffer) > 0)
+    do.call(rbind, deceased_buffer)
+  else
+    data.frame()
+  
+  stage_pop[cycle, "Pupae"] <- pupae_count
+  adults_count <- floor(pupae_count * survival_rates(3, temperature))
+  stage_pop[cycle, "Adults"] <- adults_count
+  
+  # --- Adult / egg feedback ---
+  if (adults_count <= 0) {
+    eggs_count <- 0
+  } else {
+    females_count <- floor(adults_count / 2)
+    if (females_count <= 0) {
+      eggs_count <- 0
+    } else {
+      prob <- min(1, K_L / (females_count * E_f))
+      if (USE_SYNCRNG) {
+        retained_females <- sync_rng_binomial(females_count, prob, s)
+      } else {
+        retained_females <- rbinom(1, females_count, prob)
+      }
+      if (retained_females == 0 &&
+          females_count > 0)
+        retained_females <- 1
+      eggs_count <- retained_females * E_f
+    }
+  }
+  
+  temperature_matrix[cycle, ] <- temperature_record
+  
+  pupated     <- pupated_all[[cycle]]
+  non_pupated <- if (length(W) > 0)
+    data.frame(W, R, x, y)
+  else
+    data.frame()
+  deceased    <- deceased_all[[cycle]]
+  
+  pupation_times_cycle <- if (nrow(pupated) > 0)
+    pupated$pupate_at - cycle_start
+  else
+    numeric()
+  
+  pupation_stats <- rbind(
+    pupation_stats,
+    data.frame(
+      Cycle = cycle,
+      PupationTimeMean   = ifelse(
+        length(pupation_times_cycle) > 0,
+        mean(pupation_times_cycle),
+        NA
+      ),
+      PupationTimeMedian = ifelse(
+        length(pupation_times_cycle) > 0,
+        median(pupation_times_cycle),
+        NA
+      ),
+      PupationMassMean   = ifelse(nrow(pupated) > 0, mean(pupated$W), NA),
+      PupationMassMedian = ifelse(nrow(pupated) > 0, median(pupated$W), NA),
+      NonPupatedMassMean = ifelse(nrow(non_pupated) > 0, mean(non_pupated$W), NA),
+      NonPupatedMassMedian = ifelse(nrow(non_pupated) > 0, median(non_pupated$W), NA),
+      DeadMassMean       = ifelse(nrow(deceased) > 0, mean(deceased$W), NA),
+      DeadMassMedian     = ifelse(nrow(deceased) > 0, median(deceased$W), NA),
+      EndFoodLevel       = sum(grid_food) / (map_size^2)
+    )
+  )
+} # end cycle loop
+
+# ---- Assemble time series once ----
+larval_time_series <- data.frame(
+  Cycle = lts_Cycle[1:(lts_i - 1)],
+  Hour = lts_Hour[1:(lts_i - 1)],
+  LarvaeCount = lts_LarvaeCnt[1:(lts_i - 1)],
+  SurvivalRate = lts_Survival[1:(lts_i - 1)],
+  PupationCommitments = lts_Commit[1:(lts_i - 1)],
+  Pupated = lts_Pupated[1:(lts_i - 1)],
+  Deaths = lts_Deaths[1:(lts_i - 1)],
+  ReserveMean = lts_ReserveMean[1:(lts_i - 1)],
+  ReserveMedian = lts_ReserveMedian[1:(lts_i - 1)],
+  ReserveMin = lts_ReserveMin[1:(lts_i - 1)],
+  ReserveMax = lts_ReserveMax[1:(lts_i - 1)],
+  MassMean = lts_MassMean[1:(lts_i - 1)],
+  MassMedian = lts_MassMedian[1:(lts_i - 1)],
+  MassMin = lts_MassMin[1:(lts_i - 1)],
+  MassMax = lts_MassMax[1:(lts_i - 1)],
+  OccupiedCells = lts_OccupiedCells[1:(lts_i - 1)],
+  MeanLarvaePerCell = lts_MeanLarvaePerCell[1:(lts_i - 1)],
+  MeanFoodPerCell = lts_MeanFoodPerCell[1:(lts_i - 1)],
+  FAperCell = lts_FAperCell[1:(lts_i - 1)]
+)
+
+# ----------------------------------------------------------------------------
+# 6) Plot & Print Summary
+# ----------------------------------------------------------------------------
+stage_df <- as.data.frame(stage_pop)
+stage_df$Cycle <- 1:nrow(stage_df)
+
+long_df <- melt(
+  stage_df,
+  id.vars = "Cycle",
+  variable.name = "Stage",
+  value.name = "Count"
+)
+
+ggplot(long_df, aes(
+  x = Cycle,
+  y = Count,
+  color = Stage,
+  group = Stage
+)) +
+  geom_line(size = 1.2) + geom_point(size = 2) +
+  labs(title = "IBM + RDG: Start-of-Stage Populations", x = "Cycle", y = "Count") +
+  theme_minimal()
+
+print(stage_df)
+
+cat("\n--- Pupation and Food Summary by Cycle ---\n")
+print(pupation_stats)
+#write.csv(pupation_stats, "pupation_stats.csv", row.names = FALSE)
+
+# ---- Build final output table across generations ----
+
+# Count number of larval deaths per cycle
+larval_deaths <- sapply(deceased_all, function(df)
+  if (is.null(df))
+    0
+  else
+    nrow(df))
+
+# Construct final table
+summary_df <- stage_df
+summary_df$EndFoodLevel <- pupation_stats$EndFoodLevel
+summary_df$PupationMassMean <- pupation_stats$PupationMassMean
+summary_df$LarvalDeaths <- larval_deaths
+
+
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(purrr)
+library(gridExtra)
+
+# Larval plots
+# ---- Load Data ----
+larval_data <- larval_time_series
+
+# ---- Identify All Metrics (excluding 'Cycle' and 'Hour') ----
+metric_columns <- names(larval_data)[!(names(larval_data) %in% c("Cycle", "Hour"))]
+
+# ---- Set Target Cycle for Single Plots ----
+target_cycle <- 9  # Change as needed
+
+# ---- 1. Plot Each Metric for the Selected Cycle ----
+plot_single_cycle_metric <- function(df, metric, cycle_num) {
+  df_cycle <- df %>%
+    filter(Cycle == cycle_num) %>%
+    select(Hour, !!sym(metric)) %>%
+    drop_na()
+  
+  ggplot(df_cycle, aes(x = Hour, y = !!sym(metric))) +
+    geom_line(color = "steelblue", size = 1) +
+    labs(
+      title = paste(metric, "- Cycle", cycle_num),
+      x = "Hour",
+      y = metric
+    ) +
+    theme_minimal()
+}
+
+single_cycle_plots <- map(metric_columns,
+                          ~ plot_single_cycle_metric(larval_data, .x, target_cycle))
+
+plot_combined_metrics <- function(df, metrics, cycle_num) {
+  df_cycle <- df %>%
+    filter(Cycle == cycle_num) %>%
+    select(Hour, all_of(metrics)) %>%
+    drop_na()
+  
+  # ---- Convert selected event metrics to cumulative sums ----
+  cumulative_metrics <- c("PupationCommitments", "Pupated", "Deaths")
+  for (m in cumulative_metrics) {
+    if (m %in% names(df_cycle)) {
+      df_cycle[[m]] <- cumsum(df_cycle[[m]])
+    }
+  }
+  
+  df_long <- df_cycle %>%
+    pivot_longer(cols = all_of(metrics),
+                 names_to = "Metric",
+                 values_to = "Value")
+  
+  ggplot(df_long, aes(x = Hour, y = Value, color = Metric)) +
+    geom_line(size = 1) +
+    labs(
+      title = paste("Combined Metrics - Cycle", cycle_num),
+      x = "Hour",
+      y = "Count"
+    ) +
+    theme_minimal()
+}
+
+
+reserve_combined <- plot_combined_metrics(
+  larval_data,
+  c("ReserveMean", "ReserveMedian", "ReserveMin", "ReserveMax"),
+  target_cycle
+)
+print(reserve_combined)
+
+fa_vs_food_percell_plot <- function(df, cycle_num) {
+  df_cycle <- df %>%
+    filter(Cycle == cycle_num) %>%
+    select(Hour, FAperCell, MeanFoodPerCell)
+  
+  df_long <- df_cycle %>%
+    pivot_longer(
+      cols = c("FAperCell", "MeanFoodPerCell"),
+      names_to = "Metric",
+      values_to = "Value"
+    )
+  
+  ggplot(df_long, aes(x = Hour, y = Value, color = Metric)) +
+    geom_line(size = 1.2) +
+    labs(
+      title = paste("FA Demand vs Food (per cell) — Cycle", cycle_num),
+      x = "Hour",
+      y = "Value per cell"
+    ) +
+    theme_minimal()
+}
+print(fa_vs_food_percell_plot(larval_time_series, target_cycle))
+
+
+mass_combined <- plot_combined_metrics(larval_data,
+                                       c("MassMean", "MassMedian", "MassMin", "MassMax"),
+                                       target_cycle)
+print(mass_combined)
+
+pop_combined <- plot_combined_metrics(
+  larval_data,
+  c("LarvaeCount", "PupationCommitments", "Pupated", "Deaths"),
+  target_cycle
+)
+print(pop_combined)
+
+
+
+# ---- Show All Single Cycle Plots in a Grid (optional limit) ----
+# grid.arrange(grobs = single_cycle_plots[1:6], ncol = 2)  # Preview first 6
+# Uncomment below to print them all in a scrolling viewer
+# lapply(single_cycle_plots, print)
+
+# ---- 2. Plot Each Metric for All Cycles in Facets ----
+plot_all_cycles_metric <- function(df, metric) {
+  df_all <- df %>%
+    select(Cycle, Hour, !!sym(metric)) %>%
+    drop_na()
+  
+  p <- ggplot(df_all, aes(x = Hour, y = !!sym(metric))) +
+    geom_line(color = "darkgreen", size = 0.7) +
+    facet_wrap(~ Cycle, scales = "free_y") +
+    labs(title = paste(metric, "- All Cycles"),
+         x = "Hour",
+         y = metric) +
+    theme_minimal()
+  
+  # --- Cap y-axis for survival rate between 0 and 1 ---
+  if (metric == "SurvivalRate") {
+    p <- p + coord_cartesian(ylim = c(0, 1))
+  }
+  
+  p
+}
+
+
+# ---- Detect first all-zero cycle based on LarvaeCount ----
+zero_cycles <- larval_data %>%
+  group_by(Cycle) %>%
+  summarise(all_zero = all(LarvaeCount == 0, na.rm = TRUE)) %>%
+  filter(all_zero) %>%
+  pull(Cycle)
+
+if (length(zero_cycles) > 0) {
+  cutoff_cycle <- min(zero_cycles)
+  message("Truncating plots after extinction at cycle ", cutoff_cycle)
+  larval_data_plot <- larval_data %>% filter(Cycle < cutoff_cycle)
+} else {
+  larval_data_plot <- larval_data
+}
+
+all_cycle_plots <- map(metric_columns, ~ plot_all_cycles_metric(larval_data, .x))
+print(all_cycle_plots)
+
+# View the new summary table
+print(summary_df)
+
+# ---- Export or View New Larval Time Series ----
+#print(head(larval_time_series, 20))  # Show sample
+
+# ================================================================
+#  🔍  Density dependence check (Adults vs. Larvae)
+#  Place this section *after* the main simulation loop (after stage_pop is complete)
+# ================================================================
+
+# -- 1. Prepare stage data safely --------------------------------
+# 'stage_pop' already exists in the IBM as a matrix with colnames Eggs, Larvae, Pupae, Adults.
+# We'll convert it into a data frame with cycle indices for plotting.
+
+dd_stage_df <- as.data.frame(stage_pop)
+dd_stage_df$Cycle <- seq_len(nrow(dd_stage_df))
+
+# Ensure numeric types (sometimes matrix → factors)
+dd_stage_df[] <- lapply(dd_stage_df, function(x)
+  as.numeric(as.character(x)))
+
+# Remove any incomplete or NA cycles
+dd_stage_df <- subset(dd_stage_df, is.finite(Larvae) &
+                        is.finite(Adults))
+
+# Print to confirm
+print(dd_stage_df)
+
+# -- 2. Base R quick plot ----------------------------------------
+plot(
+  dd_stage_df$Larvae,
+  dd_stage_df$Adults,
+  main = "Adults vs Larvae (Density Dependence)",
+  xlab = "Larvae",
+  ylab = "Adults",
+  pch = 19,
+  col = "blue"
+)
+abline(
+  a = 0,
+  b = 1,
+  col = "black",
+  lwd = 2,
+  lty = 2
+)
+
+# -- 3. ggplot2 smoother -----------------------------------------
+library(ggplot2)
+
+ggplot(dd_stage_df, aes(x = Larvae, y = Adults)) +
+  geom_point(color = "black", size = 3) +
+  geom_smooth(
+    method = "loess",
+    span = 0.5,
+    se = TRUE,
+    color = "blue",
+    linewidth = 1.2
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  labs(title = "Adults vs Larvae — LOESS smoother (Density Dependence)", x = "Larvae", y = "Adults") +
+  theme_minimal(base_size = 14)
+
+# ================================================================
+#  Additional density-dependence plots:
+#       1) Adults(N+1) vs Adults(N)
+#       2) Larvae(N+1) vs Larvae(N)
+# ================================================================
+
+# Prepare stage data
+dd2 <- as.data.frame(stage_pop)
+dd2$Cycle <- seq_len(nrow(dd2))
+
+# Ensure numerics
+dd2[] <- lapply(dd2, function(x) as.numeric(as.character(x)))
+
+# Drop incomplete rows
+dd2 <- subset(dd2, is.finite(Adults) & is.finite(Larvae))
+
+# Create N and N+1 variables
+dd2$Adults_N    <- dd2$Adults
+dd2$Larvae_N    <- dd2$Larvae
+dd2$Adults_Np1  <- dplyr::lead(dd2$Adults)
+dd2$Larvae_Np1  <- dplyr::lead(dd2$Larvae)
+
+# Remove last row where N+1 is NA
+dd2 <- dd2[!is.na(dd2$Adults_Np1) & !is.na(dd2$Larvae_Np1), ]
+
+
+# ================================================================
+# 1) Adults(N+1) vs Adults(N)
+# ================================================================
+cat("\n--- Adults(N+1) vs Adults(N) ---\n")
+
+# Base R version
+plot(
+  dd2$Adults_N, dd2$Adults_Np1,
+  main = "Adults(N+1) vs Adults(N)",
+  xlab = "Adults (N)",
+  ylab = "Adults (N+1)",
+  pch = 19,
+  col = "blue"
+)
+abline(a = 0, b = 1, lwd = 2, lty = 2)
+
+# ggplot version
+ggplot(dd2, aes(x = Adults_N, y = Adults_Np1)) +
+  geom_point(color = "black", size = 3) +
+  geom_smooth(
+    method = "loess",
+    span = 0.5,
+    se = TRUE,
+    color = "blue",
+    linewidth = 1.2
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  labs(
+    title = "Adults(N+1) vs Adults(N) — LOESS smoother",
+    x = "Adults (N)",
+    y = "Adults (N+1)"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+# ================================================================
+# 2) Larvae(N+1) vs Larvae(N)
+# ================================================================
+cat("\n--- Larvae(N+1) vs Larvae(N) ---\n")
+
+# Base R version
+plot(
+  dd2$Larvae_N, dd2$Larvae_Np1,
+  main = "Larvae(N+1) vs Larvae(N)",
+  xlab = "Larvae (N)",
+  ylab = "Larvae (N+1)",
+  pch = 19,
+  col = "blue"
+)
+abline(a = 0, b = 1, lwd = 2, lty = 2)
+
+# ggplot version
+ggplot(dd2, aes(x = Larvae_N, y = Larvae_Np1)) +
+  geom_point(color = "black", size = 3) +
+  geom_smooth(
+    method = "loess",
+    span = 0.5,
+    se = TRUE,
+    color = "blue",
+    linewidth = 1.2
+  ) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  labs(
+    title = "Larvae(N+1) vs Larvae(N) — LOESS smoother",
+    x = "Larvae (N)",
+    y = "Larvae (N+1)"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+# Rmd: final CSV saving (short, tidy names)
+# params$out_dir is e.g. "runs/S1/csv/S1_T20_IN_F21_DH"
+csv_dir <- normalizePath(params$out_dir, mustWork = FALSE)
+if (!dir.exists(csv_dir)) dir.create(csv_dir, recursive = TRUE)
+
+# short filenames inside the run folder
+write.csv(larval_data, file = file.path(csv_dir, "larval_data.csv"), row.names = FALSE)
+write.csv(stage_df,   file = file.path(csv_dir, "stage_df.csv"),   row.names = FALSE)
+
+if (exists("food_ts")) {
+  write.csv(food_ts, file = file.path(csv_dir, "food_ts.csv"), row.names = FALSE)
+}
+if (exists("occupancy_df")) {
+  write.csv(occupancy_df, file = file.path(csv_dir, "occupancy_df.csv"), row.names = FALSE)
+}
+
+
+```
+
+
+
+
+
+
+
+
+
+```
