@@ -21,9 +21,7 @@ validate on data the models have never seen.
 ``--scaling_seed`` identifies the *training* CSV the input/output scalings are
 read off. Those scalings must match the ones the models were trained under, so
 this is the ``--data-seed`` that was passed to ``train_approximations.py``. The
-train CSV is used solely for scalings -- it is *not* evaluated -- and the test
-seed tracks ``--data_seed`` freely, i.e. ``test_train_seeds = (data_seed,
-scaling_seed)``.
+train CSV is used solely for scalings -- it is *not* evaluated.
 
 By default the models and data are the default-parameter ones. When they were
 instead produced for one point on a Bayesian-optimisation Pareto frontier
@@ -147,14 +145,11 @@ def validate_approximations(
     with torch.no_grad():
         predicted = net(test_dataset.inputs)
     actual = test_dataset.outputs
-    rmse = (
-        ((predicted - actual) * float(scalings[1])).pow(2).mean().sqrt().item()
-    )
+    rmse = ((predicted - actual) * float(scalings[1])).pow(2).mean().sqrt().item()
     print(f"NN test RMSE (adult counts): {rmse:.4f}")
 
     nn_save_path = (
-        IMAGES_DIR
-        / f"nn_test_set_predictions_model_seed={model_seed}"
+        IMAGES_DIR / f"nn_test_set_predictions_model_seed={model_seed}"
         f"_data_seed={data_seed}_scaling_seed={scaling_seed}"
         f"{params_marker}{homozygotes_marker}.png"
     )
@@ -171,8 +166,7 @@ def validate_approximations(
 
     # --- MAF surrogate: normality of test outputs in latent space ---
     maf_save_path = (
-        IMAGES_DIR
-        / f"maf_latent_normality_model_seed={model_seed}"
+        IMAGES_DIR / f"maf_latent_normality_model_seed={model_seed}"
         f"_data_seed={data_seed}_scaling_seed={scaling_seed}"
         f"{params_marker}{homozygotes_marker}.png"
     )

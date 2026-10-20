@@ -10,7 +10,7 @@ threshold) and builds two cross-threshold figures from each threshold's top
 points (pooled across that threshold's replicates and ranked by mean verified
 objective):
 
-1. **Parameters** – a grouped bar chart of the 9 decision-variable values,
+1. **Parameters** – a grouped bar chart of the 9 parameters we are optimising, with
    one bar per threshold, showing the mean of the top points with those points
    overlaid as markers in the bar's own colour
    (``plot_best_parameters_across_thresholds``).
@@ -20,7 +20,7 @@ objective):
    (``plot_reserve_trajectory_across_thresholds``).
 
 ``--top-n N`` sets how many top points per threshold to use (default 3).  Pass
-``--surrogate`` to rank/plot the raw surrogate objectives instead of the
+``--surrogate`` to rank/plot the raw GP objectives instead of the
 verified IBM means, and ``--show-objectives`` to add the achieved-objective
 panel to the parameters figure.  With no positional argument the directory
 falls back to ``IBM_OUTPUT_DIR`` from ``paths.py``.

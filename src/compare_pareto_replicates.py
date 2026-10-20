@@ -9,8 +9,8 @@ the parameters binned by position along the frontier (band mean, with the
 band's individual points overlaid as black-ringed markers in the band's own
 colour), and the pairwise correlations between parameters.  With no argument it
 falls back to ``IBM_OUTPUT_DIR`` from ``paths.py``.  Pass
-``--surrogate`` to plot the raw surrogate objectives instead of the verified
-IBM means, and ``--spearman`` for rank correlations.  Pass ``--replicate-labels``
+``--surrogate`` to plot the raw GP objectives instead of the verified
+IBM means (generally this is unwise, unless you are sure that the GP is fitting well), and ``--spearman`` for rank correlations.  Pass ``--replicate-labels``
 to add the per-replicate legend to the frontiers figure (off by default).
 
 Pass ``--best`` to additionally build a parameters figure for just the

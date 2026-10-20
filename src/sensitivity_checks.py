@@ -1,3 +1,5 @@
+"""Conducts sobol sensitivity analysis (e.g. global sensitivity analysis) and local sensitivity analysis around the drive architecture with the highest score. As before, it can be pointed at the correct dir with --prop-gg-low and --prop-gg-high. Other flags control the evaluation budget and number of workers used, so make use of these if running on a machine with constrained resources."""
+
 import argparse
 import glob
 import re
@@ -26,11 +28,6 @@ from paths import IBM_OUTPUT_DIR, OPTIMISATION_MODELS_DIR
 #: than fresh randomness) keeps the sampled response a reproducible, quasi-
 #: deterministic function of the parameters, as the Sobol estimator assumes.
 _SOBOL_IBM_SEED = 20240607
-
-#: Fixed common-random-numbers seed for the finite-difference local sensitivity.
-#: Every point of the FD stencil is evaluated with this seed so the shared
-#: stochastic noise cancels in each difference.
-_LOCAL_CRN_SEED = 20240608
 
 #: Objective columns scored when choosing the point to compute the local
 #: sensitivity around.  These are the IBM-verified means -- re-evaluated with
@@ -100,12 +97,8 @@ def parse_args() -> argparse.Namespace:
         default=1,
         dest="sobol_replicates",
         help=(
-            "IBM replicates averaged per Sobol design point. Only needed to pull "
-            "the per-point RNG noise below the between-parameter signal (which "
-            "otherwise biases first-order indices down and inflates total-effect "
-            "indices); a few suffice. Extra budget is better spent on "
-            "--sobol-samples (more distinct points) than on replicates here. "
-            "Default: 3"
+            "IBM replicates averaged per Sobol design point. By default this is set to one, as in increasing the number above one will make the total variance seem smaller than it actually is."
+            "Default: 1"
         ),
     )
     parser.add_argument(
@@ -135,10 +128,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=100,
         dest="fd_replicates",
-        help=(
-            "IBM replicates per finite-difference stencil point (evaluated with "
-            "common random numbers). Default: 100"
-        ),
+        help=("IBM replicates per finite-difference stencil point. Default: 100"),
     )
     parser.add_argument(
         "--local-only",
@@ -248,14 +238,7 @@ def find_best_pareto_point(
     into ``data/ibm_output/low<x>_high<y>/``, so that directory holds one
     frontier per replicate of the same optimisation problem.  This pools the
     points of every one of those runs and returns the single highest-scoring
-    point, scored by the mean of the two IBM-verified objectives -- the same
-    scalarisation :func:`rank_pareto_points` and the "best parameters" figures
-    use.
-
-    The point is deliberately *not* restricted to the frontier of the most
-    accurate GP surrogate: surrogate accuracy governs which model is worth
-    plotting against the IBM, but the best drive found anywhere is the one
-    whose local sensitivity is of interest.
+    point, scored by the mean of the two IBM-verified (e.g. average over 20 replicates, rather than the 5 replicates used when conducting the search) objectives.
 
     Falls back to the legacy flat layout (a single pooled CSV per threshold
     pair, thresholds in the filename) when no per-run subdirectory exists.
@@ -321,53 +304,6 @@ if __name__ == "__main__":
                 f"in {OPTIMISATION_MODELS_DIR}."
             )
 
-        # 1. Validate every matching model and rank by the mean of the two
-        #    per-objective relative errors.  The GP surrogate is retained *only*
-        #    for the surrogate-vs-IBM validation figure; the sensitivity analyses
-        #    below evaluate the underlying IBM objective directly.
-        # print(
-        #     f"Validating {len(model_files)} model(s) for thresholds "
-        #     f"low={args.prop_gg_low} / high={args.prop_gg_high}:"
-        # )
-        # validations = []
-        # for path in sorted(model_files):
-        #     model = torch.load(path, weights_only=False)
-        #     vr = validate_surrogate(
-        #         model,
-        #         n_validation_points=2**6,
-        #         n_replicates=20,
-        #         prop_gg_low=args.prop_gg_low,
-        #         prop_gg_high=args.prop_gg_high,
-        #         n_workers=args.n_workers,
-        #     )
-        #     combined_err = (vr["f1_rel_err_mean"] + vr["f2_rel_err_mean"]) / 2
-        #     validations.append((combined_err, path, model, vr))
-        #     print(f"  {Path(path).name}:  combined error = {combined_err:.4f}")
-
-        # validations.sort(key=lambda t: t[0])
-        # best_err, best_path, best_model, best_validation_result = validations[0]
-        # print(
-        #     f"\nLowest-error model: {Path(best_path).name}  "
-        #     f"(combined error = {best_err:.4f})"
-        # )
-
-        # # Derive the matching Pareto CSV for the chosen model.
-        # best_model_path = Path(best_path)
-        # pareto_csv = derive_pareto_csv(best_model_path)
-        # pareto_X = torch.tensor(pareto_csv.iloc[:, :9].values, dtype=torch.double)
-        # verified_pareto_Y = torch.tensor(
-        #     pareto_csv.iloc[:, 11:13].values, dtype=torch.double
-        # )
-        # verified_pareto_Yvar = torch.tensor(
-        #     pareto_csv.iloc[:, 13:15].values, dtype=torch.double
-        # )
-
-    # The local sensitivity is computed around the best drive found *anywhere*
-    # -- pooling the Pareto frontiers of every optimisation run for this
-    # threshold pair -- rather than around the best point on the frontier of the
-    # most accurate GP surrogate.  Surrogate accuracy decides which model is
-    # worth plotting against the IBM above; it does not decide which drive is
-    # best.
     (
         best_point_X,
         best_point_Y,
@@ -392,9 +328,7 @@ if __name__ == "__main__":
 
         Uses independent per-point RNG seeds (a fixed master seed only for
         reproducibility), so the estimator targets the sensitivities of the
-        mean response by integrating over the IBM's intrinsic randomness — the
-        opposite of the common-random-numbers scheme used for the local
-        Jacobian below.
+        mean response by integrating over the IBM's intrinsic randomness.
         """
         Y, _ = gene_drive_objectives(
             X,
@@ -467,11 +401,7 @@ if __name__ == "__main__":
         model_id = f"low{low_tag}_high{high_tag}"
 
         plot_outputs(
-            # verified_pareto_Y=verified_pareto_Y,
-            # verified_pareto_Yvar=verified_pareto_Yvar,
-            # pareto_X=pareto_X,
             sobol_results=sobol_results,
-            # validation_results=best_validation_result,
             local_sensitivity_results=local_sensitivity_results,
             filename_suffix=f"_{model_id}",
         )

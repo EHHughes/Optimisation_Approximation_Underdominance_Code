@@ -1,3 +1,5 @@
+"""This script runs multi-objective Bayesian optimisation for the gene drive designs. To use it set the --prop-gg-low and --prop-gg-high arguments to the desired low and high release frequencies, then set running. If you want to reproduce a particular pre-existing run, set the --base-seed argument to the seed printed at the start of that run. The script will save the trained GP to the data/models/optimisation/low0pXXhigh0pYY/ directory and the Pareto frontiers to the matching directory in data/ibm/output. Note that this process is quite noisy, so several runs will give you a better sense of outcomes than just one."""
+
 import argparse
 import datetime
 import random

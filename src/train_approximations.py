@@ -18,19 +18,17 @@ marker and the same two flags must be passed here so the dataset can be found.
 The marker is carried into the saved model filenames too, so a surrogate for an
 optimised drive is never confused with the default-parameter one.
 
-``--homozygotes-only`` trains genuine two-genotype ``(WW, GG) -> (WW, GG)``
+``--homozygotes-only`` trains two-genotype ``(WW, GG) -> (WW, GG)``
 surrogates on the heterozygote-free data written by ``generate_training_data.py
 --homozygotes-only``, for underdominance architectures whose heterozygote is
 non-viable.  The saved models carry a ``_homozygotes=True`` marker, and the
-loaders wrap them back up as the pipeline's three-genotype maps (reporting
-``WG = 0``), so nothing downstream needs to change.
+loaders automatically wrap them with a function that reports WG=0 for all outputs, so they can be used as a drop-in replacement for the full three-genotype surrogates.
 """
 
 import argparse
 from pathlib import Path
 
 import numpy as np
-
 from Gene_Drive_Optimisation.gene_drive_objective import load_gene_drive_parameters
 from IBM_Emulation.surrogates import construct_surrogate_function
 from IBM_Emulation.variational_approximations import (

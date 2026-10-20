@@ -8,7 +8,7 @@ optimised drive.  Data generated that way carries a ``_params=`` marker in its
 filename and can never be confused with the default-parameter data.
 
 ``--homozygotes-only`` samples the input adults on the WW/GG face only, with no
-heterozygotes.  Underdominance architectures make the heterozygote non-viable,
+heterozygotes.  Some underdominance architectures make the heterozygote non-viable,
 so the dynamics never visit a state with WG adults and the default
 three-genotype sampling spends most of its trials describing a region the
 surrogate will never be asked about.  Such data carries a
