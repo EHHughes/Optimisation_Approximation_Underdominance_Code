@@ -8,11 +8,10 @@ Two test suites:
 import pytest
 import torch
 import torch.utils.data
-
 from IBM_Emulation.surrogates import (
     SimpleFeedforwardNN,
-    train_loop,
     test_loop,
+    train_loop,
 )
 
 # Prevent pytest from collecting the imported production functions as tests
@@ -49,15 +48,7 @@ def _make_target_net(seed: int = 42) -> SimpleFeedforwardNN:
 
 def init_weights_high_variance(m):
     if isinstance(m, torch.nn.Linear):
-        # Orthogonal weights give maximally different projections per neuron.
-        # gain=1.5 keeps the teacher nonlinear enough that a deep network is
-        # needed to reproduce it (so depth-4 wins) while staying learnable, so
-        # the best student's absolute loss stays small. Higher gains separate
-        # the depths more but blow up the absolute loss; lower gains make the
-        # map so smooth that every depth fits it and depth stops mattering.
         torch.nn.init.orthogonal_(m.weight, gain=1.5)
-        # Spread biases so neurons activate on different input regions rather
-        # than all switching on/off together.
         torch.nn.init.uniform_(m.bias, -0.5, 0.5)
 
 

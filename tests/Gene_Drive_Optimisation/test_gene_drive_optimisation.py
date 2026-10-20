@@ -256,13 +256,6 @@ class TestEvaluateGeneDriveRandomness:
     Low-variance symptoms could indicate that all replicates are using the
     same RNG state (e.g. SeedSequence objects passed where integers are
     expected, or seeds never forwarded to the simulation).
-
-    _PROP_LOW (5 %) is intentionally the low-release value used in the
-    optimisation scenario.  It is kept for cross-call variance tests but NOT
-    used for the within-call std test: with ~5 GG founders and only a few
-    cycles they reliably go extinct in every replicate, so std is genuinely
-    zero and that tells us nothing about seeding.  _PROP_MID (30 %) is used
-    instead — enough founders to survive and produce variable adult counts.
     """
 
     _PENALTIES = np.ones((4, 2)) * 0.9  # mild fitness cost on WG and GG
@@ -609,7 +602,10 @@ class TestSaveParetoFrontierPoints:
         verified_Y = torch.tensor([self._VERIFIED_MEAN_VALUES], dtype=torch.double)
         verified_Yvar = torch.tensor([self._VERIFIED_VAR_VALUES], dtype=torch.double)
         save_pareto_frontier_points(
-            pareto_X, pareto_Y, verified_Y, verified_Yvar,
+            pareto_X,
+            pareto_Y,
+            verified_Y,
+            verified_Yvar,
             str(tmp_path / "pareto.csv"),
             prop_gg_low=self._PROP_GG_LOW,
             prop_gg_high=self._PROP_GG_HIGH,
@@ -617,7 +613,9 @@ class TestSaveParetoFrontierPoints:
         )
         low_tag = f"{self._PROP_GG_LOW:.2f}".replace(".", "p")
         high_tag = f"{self._PROP_GG_HIGH:.2f}".replace(".", "p")
-        expected = tmp_path / f"low{low_tag}_high{high_tag}" / "pareto_20260529_141200.csv"
+        expected = (
+            tmp_path / f"low{low_tag}_high{high_tag}" / "pareto_20260529_141200.csv"
+        )
         assert expected.exists(), f"Expected file at {expected}"
         assert not (tmp_path / f"pareto_low{low_tag}_high{high_tag}.csv").exists()
 
@@ -628,7 +626,10 @@ class TestSaveParetoFrontierPoints:
         verified_Y = torch.tensor([self._VERIFIED_MEAN_VALUES], dtype=torch.double)
         verified_Yvar = torch.tensor([self._VERIFIED_VAR_VALUES], dtype=torch.double)
         save_pareto_frontier_points(
-            pareto_X, pareto_Y, verified_Y, verified_Yvar,
+            pareto_X,
+            pareto_Y,
+            verified_Y,
+            verified_Yvar,
             str(tmp_path / "pareto.csv"),
             prop_gg_low=self._PROP_GG_LOW,
             prop_gg_high=self._PROP_GG_HIGH,
