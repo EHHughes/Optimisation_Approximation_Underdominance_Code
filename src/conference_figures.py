@@ -4,7 +4,7 @@ Thin entry-point wrapper: the figure logic lives in the ``plot_*`` modules of
 each sub-package; this script just selects and runs them.  All figures are
 written to ``data/images/conference_slides/``.
 
-Run from ``Coarse_Graining_IBMS/src/``::
+Run from ``src/``::
 
     python conference_figures.py --figure all      # every figure
     python conference_figures.py --figure 1        # just the larvae-behaviour figure

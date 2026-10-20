@@ -39,7 +39,7 @@ Each objective is averaged over `n_replicates` stochastic IBM runs and evaluated
 
 ### Entry point
 
-`../optimise_gene_drive.py` is a thin script that calls `optimise_gene_drive` and saves the resulting Pareto-front figures to disk. Run from the `Coarse_Graining_IBMS` directory:
+`../optimise_gene_drive.py` is a thin script that calls `optimise_gene_drive` and saves the resulting Pareto-front figures to disk. Run from `src/`:
 
 ```bash
 python optimise_gene_drive.py

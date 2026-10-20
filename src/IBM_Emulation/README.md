@@ -19,18 +19,13 @@ Downstream code is built on a three-genotype `(3,) -> (3,)` / `(N, 3) -> (N, 3)`
   - `select_homozygotes` / `embed_homozygotes`: the `(..., 3)` ↔ `(..., 2)` column pair backing the homozygote-only mode; works on numpy arrays and torch tensors.
   - `report_heterozygote_residual` / `report_heterozygote_residual_for_dataset`: measure the WG share of a dataset's output adults, i.e. what a homozygote-only surrogate discards.
   - `warn_if_heterozygote_inputs_present`: flags the separate mistake of dropping a WG *input* column the data actually varies.
-- **`surrogates.py`** — Neural network definition, training utilities, and hyperparameter tuning.
+- **`surrogates.py`** — Neural network definition and training utilities.
   - `SimpleFeedforwardNN`: configurable feedforward network (`input_size → hidden_size → 2×hidden_size → … → output_size`) with ReLU activations and a variable number of hidden layers.
   - `construct_surrogate_function`: trains a fixed-architecture network for 900 epochs and saves the weights to disk.
-  - `tune_hyperparameters`: searches over architecture and optimiser hyperparameters using Ray Tune with an ASHA scheduler.
-  - `train_with_tunable_hyperparameters`: single-trial training function consumed by Ray Tune; supports checkpoint resumption.
-  - `load_and_split_dataset`: splits the training dataset into train/validation subsets for use inside `train_with_tunable_hyperparameters`.
-  - `train_for_one_epoch` / `compute_val_loss` / `checkpoint_and_report`: helpers used by the Ray Tune training loop.
-  - `train_loop` / `test_loop`: simpler epoch-level train/eval loops used by `construct_surrogate_function`.
+  - `train_loop` / `test_loop`: epoch-level train/eval loops used by `construct_surrogate_function`.
   - `plot_test_set_predictions`: scatter plots of actual vs. predicted outputs per genotype.
   - `load_pretrained_neural_net`: loads a saved model from disk for inference on a different device; with `homozygotes_only=True` returns it wrapped so the three-genotype contract still holds.
   - `HomozygoteSurrogate`: presents a two-genotype (WW, GG) net as the pipeline's three-genotype map, reporting `WG = 0`.
-  - `display_output_and_save_best_model`: extracts and saves the best model after a Ray Tune run.
 
 - **`variational_approximations.py`** — Masked Autoregressive Flow (MAF / NSF) as a stochastic alternative to the deterministic feedforward NN; captures the IBM's output distribution rather than just its mean.
   - `train_maf`: trains a normalising flow on the IBM dataset with GPU support.
@@ -52,7 +47,5 @@ Downstream code is built on a three-genotype `(3,) -> (3,)` / `(N, 3) -> (N, 3)`
 
 - **`TestSimpleFeedforwardNN`** — architecture shape, hidden-layer depth, width doubling, gradient flow, and batch independence.
 - **`TestTrainAndTestLoops`** — verifies `train_loop` reduces loss and `test_loop` returns a non-negative float.
-- **`TestHyperparameterTuningRecovery`** — uses a teacher network at maximum search-space capacity to verify that (a) the correct architecture fits the data better than smaller ones, and (b) `train_with_tunable_hyperparameters` runs correctly with mocked Ray internals.
-- **`TestTuneHyperparametersEndToEnd`** *(marked `slow`)* — full Ray Tune integration test that verifies `tune_hyperparameters` recovers the teacher architecture via an exhaustive grid search.
 
 `tests/IBM_Emulation/test_homozygote_only_surrogates.py` covers the homozygote-only mode: the select/embed column pair, `HomozygoteSurrogate`'s contract, the residual diagnostics, and `_homozygotes=True` marker propagation through every filename layer.

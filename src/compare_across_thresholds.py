@@ -1,6 +1,6 @@
 """Compare the optimal gene-drive designs across release-threshold windows.
 
-Run from ``Coarse_Graining_IBMS/src/``::
+Run from ``src/``::
 
     python compare_across_thresholds.py
 

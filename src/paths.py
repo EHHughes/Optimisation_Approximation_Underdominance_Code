@@ -1,4 +1,4 @@
-"""Central path constants for Coarse_Graining_IBMS.
+"""Central path constants for this project.
 
 All modules should import paths from here rather than constructing them locally,
 so that output locations are consistent regardless of the working directory from
@@ -7,7 +7,7 @@ which scripts are invoked.
 
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent  # Coarse_Graining_IBMS/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent  # repository root
 
 IBM_OUTPUT_DIR = _PROJECT_ROOT / "data" / "ibm_output"
 IMAGES_DIR = _PROJECT_ROOT / "data" / "images"

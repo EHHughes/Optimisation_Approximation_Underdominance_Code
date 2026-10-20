@@ -17,7 +17,6 @@ Each subdirectory has its own README with module-level detail. Generated data, t
 ### Entry-point scripts
 
 - **`generate_training_data.py`** — runs the non-spatial IBM to generate the `(adults in → adults out)` input-output pairs the surrogates are trained on.
-- **`fit_neural_net.py`** — runs Ray Tune hyperparameter search for the IBM surrogate neural net.
 - **`train_approximations.py`** — trains both surrogates (feedforward NN and MAF normalising flow) reproducibly under a single seed.
 - **`validate_approximations.py`** — validates both trained surrogates against a held-out test set.
 - **`simulate_nonspatial.py`** — compares multigeneration IBM and surrogate adult trajectories.

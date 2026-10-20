@@ -1,6 +1,6 @@
 """Compare the Pareto frontiers + parameters across optimisation replicates.
 
-Run from ``Coarse_Graining_IBMS/src/``::
+Run from ``src/``::
 
     python compare_pareto_replicates.py ../data/ibm_output/low0p30_high0p50
 

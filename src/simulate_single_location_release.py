@@ -1,6 +1,6 @@
 """Simulate gene-drive releases into one equilibrated wild-type population.
 
-Run from ``Coarse_Graining_IBMS/src/``::
+Run from ``src/``::
 
     python simulate_single_location_release.py --default
     python simulate_single_location_release.py \\

@@ -1,7 +1,7 @@
 """Helper script to validate the trained surrogate approximations against a
 held-out test set.
 
-Run from ``Coarse_Graining_IBMS/src/``::
+Run from ``src/``::
 
     python validate_approximations.py --model_seed 1180468651 --data_seed 27 \
         --scaling_seed 27
