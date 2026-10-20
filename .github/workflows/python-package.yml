@@ -46,7 +46,7 @@ jobs:
     - name: Install package
       run: .venv/bin/pip install -e .
     - name: Test with pytest
-      # Run the FULL suite, including tests marked `slow` (e.g. the end-to-end
-      # Ray Tune integration). The `slow` marker is only for skipping locally;
-      # do NOT add `-m "not slow"` here or CI coverage drops silently.
+      # Run the FULL suite, including tests marked `slow` (the ones that drive
+      # the real IBM). The `slow` marker is only for skipping locally; do NOT
+      # add `-m "not slow"` here or CI coverage drops silently.
       run: .venv/bin/pytest
