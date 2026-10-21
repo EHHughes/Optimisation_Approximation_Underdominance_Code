@@ -1,6 +1,6 @@
 # Optimisation and Approximation of Underdominance Gene Drives — Reference Code
 
-The code and data in this repository can be used to reproduce Hughes & Bonsall 2026 (soon to be submitted). The agent-based larval model is also potentially of wider interest (although a more efficient refactored model is coming soon!). 
+The code and data in this repository can be used to reproduce Hughes & Bonsall 2026 (soon to be submitted). The agent-based larval model is also potentially of wider interest (although a more efficient refactored model is coming soon!). Almost all of the code is written in `python`, although a version of the model without genetics is available in `R`.
 
 ## Layout
 
@@ -14,13 +14,13 @@ The code and data in this repository can be used to reproduce Hughes & Bonsall 2
 
 ## Installation
 
-This repo should be relatively straightforward to install and should run on most modern versions of python (data and figures were generated using python 3.11). Follow the script below to install (the final step can be omitted unless you intend to edit, modify, or otherwise build upon the code). 
+This repo should be relatively straightforward to install and should run on most modern versions of python (data and figures were generated using python 3.11 on linux). Follow the script below to install (the final step can be omitted unless you intend to edit, modify, or otherwise build upon the code). 
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .            # makes the src/ packages importable from outside src/
+pip install -e .            # makes the installation editable
 ```
 
 If you're not intending to use the surrogate modelling code, you may be able to skip installing `pytorch` (which is otherwise a heavy, slow download) but I have not debugged this thoroughly, so caveat emptor. 
@@ -57,62 +57,19 @@ pytest -m slow         # only the slow tests
 
 The `slow` marker exists so the tests that run the IBM can be skipped. If you are running this on a machine with limited resources you should consider this, as they can be quite resource intensive (particularly those which exercise the input-output pairs code, which aggressively spawn multiple processes).
 
+If you wish to run the `R` version of the model, it can be found in `src/IBM_Implementations/`.
+
 ## Data
 
 Under `data/`:
 
-- `ziqian_ibm_runs/` — stage counts from Ziqian's R IBM; committed *input* data.
 - `ibm_output/` — IBM input-output pair CSVs (named by seed), the
   `low<lo>_high<hi>/` Pareto-frontier replicates for each release-threshold
   window, and `single_location_releases/` raw per-generation stage counts.
 - `models/surrogates/` — the trained NN and MAF surrogates for seed
   `1180468651`, which are the ones behind the manuscript's figures.
 - `models/optimisation/` — BoTorch model checkpoints for every BO run.
-- `images/` — the figures these scripts produce.
-
-## Deliberate divergences from the snapshot commit
-
-Everything here follows from dropping the spatial package and the unused Ray
-Tune hyperparameter search; nothing else was changed.
-
-- `src/conference_figures.py` — figures 4 (2D MAF release) and 5 (dispersal
-  kernel) were spatial and are removed. The remaining figures keep their
-  original numbers.
-- `tests/IBM_Emulation/test_homozygote_only_surrogates.py` — the single test
-  exercising `HomozygoteSurrogate` inside `SpatialSimulation` is removed; the
-  rest of the file is unchanged.
-- `src/README.md` and `src/IBM_Emulation/README.md` — spatial and Ray Tune
-  entries removed.
-- The Ray Tune hyperparameter search is removed: it was exploratory and no
-  result in the manuscript depends on it. Gone are `src/fit_neural_net.py`, the
-  nine search helpers in `src/IBM_Emulation/surrogates.py`
-  (`tune_hyperparameters`, `get_param_space_and_config`,
-  `train_with_tunable_hyperparameters`, `_config_n_features`,
-  `load_and_split_dataset`, `train_for_one_epoch`, `compute_val_loss`,
-  `checkpoint_and_report`, `display_output_and_save_best_model`),
-  `TestTuneHyperparametersEndToEnd` in `tests/IBM_Emulation/test_surrogates.py`,
-  and `ray` plus its 54 transitive dependencies from `requirements.txt`. The
-  surrogates behind the manuscript's figures were trained by
-  `train_approximations.py`, which is untouched. The `slow` marker stays: the
-  IBM-driven tests still use it.
-- The working repository's `Coarse_Graining_IBMS/` directory level is removed:
-  `src/`, `tests/` and `data/` sit at the repository root here. The level
-  carried no meaning once the project stood alone, and it put every path in the
-  documentation one step away from what a reader actually types. `pytest.ini`
-  (`testpaths`, `pythonpath`), `setup.py` (`package_dir`) and the "run from"
-  docstrings follow the new locations; `src/paths.py` needed no change, since
-  it already resolved `data/` as a sibling of `src/`.
-- `setup.py` — renamed distribution (see "Installation") and adjusted docstring.
-- Dropped: the superseded `src/IBM_Implementations/legacy/` implementations, the
-  `legacy/` data and figure directories, a stale duplicate `pyproject.toml` that
-  conflicted with the root `setup.py`/`pytest.ini`, the committed `egg-info`
-  build artefacts, and the HPC directory (an Apptainer recipe and Slurm script
-  for the optimisation runs, plus the 699 MB built image).
-- A handful of explanatory comments in `IBM_Emulation/` and
-  `Gene_Drive_Optimisation/` still mention `SpatialSimulation` when explaining
-  why an interface has the shape it does. They are left verbatim rather than
-  reworded: the interface contract they describe is real, and the class itself
-  lives in the companion spatial repository.
+- `images/` — images used in the manuscript.
 
 ## AI Usage
 
