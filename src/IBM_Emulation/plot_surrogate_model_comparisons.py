@@ -411,6 +411,7 @@ def compare_multigeneration_ibm_to_nn(
     save_path: str | None = None,
     for_conference: bool = False,
     model_type: str = "nn",
+    drop_heterozygotes: bool = True,
 ) -> plt.Figure:
     """Compare multi-generation IBM trajectories to a surrogate model.
 
@@ -450,6 +451,11 @@ def compare_multigeneration_ibm_to_nn(
     n_maf_trajectories : int
         Number of independent stochastic MAF trajectories to average when
         model_type="maf".
+    drop_heterozygotes : bool
+        Omit the WG panel, leaving a single row of three (WW, GG, Total).
+        Heterozygotes are non-viable under most of the architectures studied
+        here, so the panel is usually empty. Set False for the legacy
+        2x2 (WW, WG, GG, Total) layout.
 
     Returns
     -------
@@ -527,13 +533,24 @@ def compare_multigeneration_ibm_to_nn(
         surrogate_label = f"MAF mean ($n={n_replicates}$ trajectories)"
 
     # --- Plot -----------------------------------------------------------
-    genotypes = ["WW", "WG", "GG", "Total"]
-    colours = [
-        plot_style.GENOTYPE_COLORS["WW"],
-        plot_style.GENOTYPE_COLORS["WG"],
-        plot_style.GENOTYPE_COLORS["GG"],
-        plot_style.IBM_PALETTE[1],  # purple for the population total
-    ]
+    # The WG panel is dropped by default: heterozygotes are non-viable under
+    # most architectures, so it is an empty axis in all but the legacy layout.
+    all_genotypes = ["WW", "WG", "GG", "Total"]
+    genotypes = ["WW", "GG", "Total"] if drop_heterozygotes else all_genotypes
+    # Gold reads as the population total across the thesis figures, but it is
+    # a near neighbour of the WG amber: on the legacy layout that keeps the WG
+    # panel, the total falls back to the palette's purple so no two panels
+    # share a hue.
+    total_colour = (
+        plot_style.IBM_PALETTE[4] if drop_heterozygotes else plot_style.IBM_PALETTE[1]
+    )
+    panel_colours = {
+        "WW": plot_style.GENOTYPE_COLORS["WW"],
+        "WG": plot_style.GENOTYPE_COLORS["WG"],
+        "GG": plot_style.GENOTYPE_COLORS["GG"],
+        "Total": total_colour,
+    }
+    colours = [panel_colours[g] for g in genotypes]
     generations = np.arange(n_generations + 1)
 
     ibm_total = ibm_traj.sum(axis=2)  # (n_replicates, n_generations+1)
@@ -555,9 +572,17 @@ def compare_multigeneration_ibm_to_nn(
         }
     )
     with plt.rc_context(rc):
-        if for_conference:
-            fig, axes_2d = plt.subplots(1, 4, figsize=(16, 5), sharex=True, sharey=True)
-            axes = list(axes_2d)
+        # One row per figure unless the legacy four-panel thesis layout is
+        # asked for, which stays 2x2.
+        single_row = for_conference or drop_heterozygotes
+        if single_row:
+            n_panels = len(genotypes)
+            width = 4.0 * n_panels if for_conference else 4.5 * n_panels
+            height = 5.0 if for_conference else 4.5
+            fig, axes_2d = plt.subplots(
+                1, n_panels, figsize=(width, height), sharex=True, sharey=True
+            )
+            axes = list(np.atleast_1d(axes_2d))
         else:
             fig, axes_2d = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
             axes = list(axes_2d.flat)
@@ -621,7 +646,7 @@ def compare_multigeneration_ibm_to_nn(
             ax.spines["top"].set_visible(False)
             ax.spines["right"].set_visible(False)
 
-        if for_conference:
+        if single_row:
             for ax in axes:
                 ax.set_xlabel("Generation")
             axes[0].set_ylabel("Adults")
@@ -660,6 +685,7 @@ def compare_multigeneration_ibm_to_nn(
 
     name = (
         f"multigen_ibm_vs_{model_type}"
+        f"{'_nohet' if drop_heterozygotes else ''}"
         f"_WW{init_WW}_WG{init_WG}_GG{init_GG}"
         f"_{n_replicates}rep_{n_generations}gen"
         f"_T{fixed_temperature}"

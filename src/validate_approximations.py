@@ -91,6 +91,7 @@ def validate_approximations(
     scaling_seed: int,
     param_tag: str | None = None,
     homozygotes_only: bool = False,
+    drop_heterozygotes: bool = True,
 ) -> None:
     """Run the NN and MAF test-set diagnostics and save both figures.
 
@@ -100,6 +101,8 @@ def validate_approximations(
     non-default gene-drive parameter set, and is carried into the figure
     filenames. ``homozygotes_only`` selects the two-genotype ``(WW, GG)``
     models and the heterozygote-free data they were fit to.
+    ``drop_heterozygotes`` omits the WG panel from the NN test-set figure,
+    leaving a 1x3 row of WW, GG and Total; it affects that figure only.
     """
     device = torch.device("cpu")
     # Test set varies with --data_seed; the train seed is the models' training
@@ -161,6 +164,7 @@ def validate_approximations(
         save_path=str(nn_save_path),
         subsample=5,
         embed=embed_homozygotes if homozygotes_only else None,
+        drop_heterozygotes=drop_heterozygotes,
     )
     print(f"Saved NN test-set predictions to {nn_save_path}")
 
@@ -226,6 +230,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--keep-heterozygotes",
+        action="store_true",
+        dest="keep_heterozygotes",
+        help=(
+            "Keep the WG panel in the NN test-set figure, restoring the "
+            "legacy 2x2 (WW, WG, GG, Total) layout. By default the panel is "
+            "dropped, since heterozygotes are non-viable under most "
+            "architectures, giving a single row of three panels."
+        ),
+    )
+    parser.add_argument(
         "--pareto-file",
         type=Path,
         default=None,
@@ -267,4 +282,5 @@ if __name__ == "__main__":
         scaling_seed=args.scaling_seed,
         param_tag=resolve_param_tag(args.pareto_file, args.pareto_row),
         homozygotes_only=args.homozygotes_only,
+        drop_heterozygotes=not args.keep_heterozygotes,
     )

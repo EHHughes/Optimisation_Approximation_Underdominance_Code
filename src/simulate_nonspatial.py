@@ -39,6 +39,17 @@ if __name__ == "__main__":
             "produced that way, since the marker is part of its filename."
         ),
     )
+    parser.add_argument(
+        "--keep-heterozygotes",
+        action="store_true",
+        dest="keep_heterozygotes",
+        help=(
+            "Keep the WG panel in the multi-generation figure, restoring the "
+            "legacy 2x2 (WW, WG, GG, Total) layout. By default the panel is "
+            "dropped, since heterozygotes are non-viable under most "
+            "architectures, giving a single row of three panels."
+        ),
+    )
     args = parser.parse_args()
 
     seed = args.seed if args.seed is not None else int(np.random.randint(int(1e6)))
@@ -57,4 +68,5 @@ if __name__ == "__main__":
         model_seed=model_seed,
         model_type=model_type,
         homozygotes_only=args.homozygotes_only,
+        drop_heterozygotes=not args.keep_heterozygotes,
     )

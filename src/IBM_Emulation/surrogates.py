@@ -155,9 +155,9 @@ def construct_surrogate_function(
     params_marker = f"_params={param_tag}" if param_tag else ""
     homozygotes_marker = "_homozygotes=True" if homozygotes_only else ""
     plot_test_set_predictions(
-        # The two-genotype net and its two-column dataset are embedded back into
-        # the three-genotype layout, so the figure keeps its WW/WG/GG/Total
-        # panels and the WG panel reads as the flat zero the model asserts.
+        # The two-genotype net and its two-column dataset are embedded back
+        # into the three-genotype layout the wrapped surrogate expects; the WG
+        # column it restores is only plotted when the WG panel is kept.
         HomozygoteSurrogate(net) if homozygotes_only else net,
         test_dataloader,
         scalings,
@@ -326,14 +326,15 @@ def plot_test_set_predictions(
     subsample: int = 1,
     alpha: float = 0.5,
     embed=None,
+    drop_heterozygotes: bool = True,
 ) -> None:
     """Plot actual vs predicted outputs for a genetics-aware dataset.
 
-    Produces four panels: one per genotype (WW, WG, GG) and a Total panel
-    that sums across genotypes. The Total panel includes a dotted x=y identity
-    line drawn in the underlying (linear) data space. When log_y=True, all
-    y-axes use log scale; otherwise (default) they are linear and truncated at
-    y=0. All axes are shared across panels.
+    Produces one panel per genotype plus a Total panel that sums across
+    genotypes. The Total panel includes a dotted x=y identity line drawn in
+    the underlying (linear) data space. When log_y=True, all y-axes use log
+    scale; otherwise (default) they are linear and truncated at y=0. All axes
+    are shared across panels.
 
     ``subsample`` plots only every ``subsample``-th point to declutter dense
     test sets; ``alpha`` sets the marker opacity.
@@ -341,18 +342,41 @@ def plot_test_set_predictions(
     ``embed`` widens the dataset's inputs and outputs before the forward pass.
     A two-genotype dataset has no WG column, so pass
     :func:`IBM_Emulation.dataloaders.embed_homozygotes` to restore the
-    three-genotype layout that both the four panels and the wrapped surrogate
-    expect; the WG panel then shows the flat zero the model asserts.
+    three-genotype layout the wrapped surrogate expects; with
+    ``drop_heterozygotes=False`` the WG panel then shows the flat zero the
+    model asserts.
 
-    conference=True  → 1×4 wide layout suited to slides.
-    conference=False → 2×2 layout suited to paper figures (default).
+    ``drop_heterozygotes`` (default) omits the WG panel, leaving WW, GG and
+    Total. Heterozygotes are non-viable under most of the architectures
+    studied here, so that panel is an empty axis; set it False for the legacy
+    four-panel (WW, WG, GG, Total) figure.
+
+    conference=True  → single wide row suited to slides.
+    conference=False → 1×3 row, or 2×2 when drop_heterozygotes=False
+                       (the legacy paper layout).
     """
     net.eval()
     inputs = dataloader.dataset.inputs
     outputs = dataloader.dataset.outputs
 
-    genotype_labels = ["WW", "WG", "GG"]
-    colours = ["#0C7BDC", "#FFC20A", "#DC267F", "#984ea3"]
+    # The WG panel is dropped by default (see ``drop_heterozygotes``), so each
+    # panel carries the data column it reads rather than relying on the panel
+    # index: without that the GG panel would silently plot the WG column.
+    genotype_labels = ["WW", "GG"] if drop_heterozygotes else ["WW", "WG", "GG"]
+    genotype_columns = {"WW": 0, "WG": 1, "GG": 2}
+    # Gold reads as the population total across the thesis figures, but it is
+    # a near neighbour of the WG amber: on the legacy layout that keeps the WG
+    # panel, the total falls back to the palette's purple so no two panels
+    # share a hue.
+    total_colour = (
+        plot_style.IBM_PALETTE[4] if drop_heterozygotes else plot_style.IBM_PALETTE[1]
+    )
+    panel_colours = {
+        "WW": plot_style.GENOTYPE_COLORS["WW"],
+        "WG": plot_style.GENOTYPE_COLORS["WG"],
+        "GG": plot_style.GENOTYPE_COLORS["GG"],
+        "Total": total_colour,
+    }
 
     if embed is not None:
         # Widen *before* the forward pass: a two-genotype dataset has no WG
@@ -395,27 +419,34 @@ def plot_test_set_predictions(
             **plot_style.OPEN_SPINES_RC,
         }
     ):
-        if conference:
-            fig, axes_2d = plt.subplots(1, 4, figsize=(20, 4), sharex=True, sharey=True)
-            axes = axes_2d  # flat list of 4
+        # A single row unless the legacy four-panel paper layout is asked for.
+        single_row = conference or drop_heterozygotes
+        n_panels = len(genotype_labels) + 1  # the genotypes, plus Total
+        if single_row:
+            width = (5.0 if conference else 4.5) * n_panels
+            height = 4.0 if conference else 4.5
+            fig, axes_2d = plt.subplots(
+                1, n_panels, figsize=(width, height), sharex=True, sharey=True
+            )
+            axes = list(np.atleast_1d(axes_2d))
         else:
             fig, axes_2d = plt.subplots(2, 2, figsize=(10, 8), sharex=True, sharey=True)
-            axes = axes_2d.flat  # iterable of 4 in row-major order
+            axes = list(axes_2d.flat)  # 4 panels in row-major order
 
-        axes = list(axes)
-
-        for i, (label, colour) in enumerate(zip(genotype_labels, colours)):
-            jitter = np.random.normal(0, 0.05, size=inputs_np[:, i].shape)
+        for i, label in enumerate(genotype_labels):
+            column = genotype_columns[label]
+            colour = panel_colours[label]
+            jitter = np.random.normal(0, 0.05, size=inputs_np[:, column].shape)
             axes[i].scatter(
-                inputs_np[:, i] * scalings[0] + jitter,
-                outputs_np[:, i] * scalings[1],
+                inputs_np[:, column] * scalings[0] + jitter,
+                outputs_np[:, column] * scalings[1],
                 s=15,
                 c=colour,
                 alpha=alpha,
             )
             axes[i].scatter(
-                inputs_np[:, i] * scalings[0] + jitter,
-                predicted_y[:, i] * scalings[1],
+                inputs_np[:, column] * scalings[0] + jitter,
+                predicted_y[:, column] * scalings[1],
                 s=15,
                 marker="*",
                 c=colour,
@@ -423,14 +454,14 @@ def plot_test_set_predictions(
             )
             axes[i].set_title(label)
 
-        # Total panel (index 3)
-        total_colour = colours[3]
+        # Total panel: always the last one, however many genotypes are shown.
+        total_ax = axes[-1]
         total_in = inputs_np.sum(axis=1) * scalings[0]
         total_out_actual = outputs_np.sum(axis=1) * scalings[1]
         total_out_pred = predicted_y.sum(axis=1) * scalings[1]
 
-        axes[3].scatter(total_in, total_out_actual, s=15, c=total_colour, alpha=alpha)
-        axes[3].scatter(
+        total_ax.scatter(total_in, total_out_actual, s=15, c=total_colour, alpha=alpha)
+        total_ax.scatter(
             total_in, total_out_pred, s=15, marker="*", c=total_colour, alpha=alpha
         )
 
@@ -438,9 +469,9 @@ def plot_test_set_predictions(
         # smooth curve when the y-axis is log-scaled.
         lo, hi = total_in.min(), total_in.max()
         x_line = np.linspace(lo, hi, 300)
-        axes[3].plot(x_line, x_line, "k:", linewidth=1.5, zorder=2)
+        total_ax.plot(x_line, x_line, "k:", linewidth=1.5, zorder=2)
 
-        axes[3].set_title("Total")
+        total_ax.set_title("Total")
 
         for ax in axes:
             if log_y:
@@ -450,9 +481,9 @@ def plot_test_set_predictions(
                 ax.set_ylim(bottom=0)
 
         # Axis labels — placement differs by layout
-        if conference:
-            axes[1].set_xlabel("Input Adults")
-            axes[3].set_xlabel("Input Adults")
+        if single_row:
+            for ax in axes:
+                ax.set_xlabel("Input Adults")
             axes[0].set_ylabel("Output Adults")
         else:
             axes[2].set_xlabel("Input Adults")
