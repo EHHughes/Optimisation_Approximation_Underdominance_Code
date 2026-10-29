@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+import pandas as pd
 import torch
 from SALib.analyze import sobol as sobol_analyze
 from SALib.sample import sobol as sobol_sample
@@ -330,3 +331,243 @@ def print_sobol_indices(results: dict) -> None:
                 f"  {Si['ST'][j]:>8.4f}  {Si['ST_conf'][j]:>8.4f}"
             )
     print(f"{'─' * 64}\n")
+
+
+#: Marker written into (and required back out of) the ``analysis`` column of
+#: every saved sensitivity CSV.  The two analyses produce different tables from
+#: the same script, so the marker is what lets a replot dispatch on a file
+#: without guessing from its name.
+SOBOL_ANALYSIS_TAG = "sobol_indices"
+LOCAL_ANALYSIS_TAG = "local_sensitivity"
+
+
+def sobol_indices_to_dataframe(results: dict, **metadata) -> pd.DataFrame:
+    """Flatten :func:`compute_sobol_indices` output into a tidy dataframe.
+
+    Every Sobol design point costs a full IBM evaluation, so a run of any
+    useful size is hours to days of compute; saving the resulting indices means
+    a figure can be redrawn -- restyled, relabelled, recoloured -- without ever
+    paying that again.  :func:`sobol_indices_from_dataframe` reverses this
+    exactly, so the round trip reproduces the figure.
+
+    One row per estimated index: first-order (``S1``) and total-effect (``ST``)
+    rows name a single parameter; second-order (``S2``) rows name the pair, and
+    appear only for the ``i < j`` entries SALib actually estimates (the rest of
+    its matrix is ``NaN`` padding and is not written out).
+
+    Parameters
+    ----------
+    results:
+        Dict returned by :func:`compute_sobol_indices`.
+    **metadata:
+        Scalars describing the run that produced *results* (sample size,
+        replicate count, release thresholds, ...), written as repeated columns.
+        They identify the design behind the numbers; nothing reads them back.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    param_names = list(results["param_names"])
+    d = len(param_names)
+
+    rows: list[dict] = []
+    for obj in results["objective_names"]:
+        Si = results[obj]
+        for kind in ("S1", "ST"):
+            for j, name in enumerate(param_names):
+                rows.append(
+                    {
+                        "analysis": SOBOL_ANALYSIS_TAG,
+                        "objective": obj,
+                        "index": kind,
+                        "parameter": name,
+                        "parameter_2": None,
+                        "value": float(Si[kind][j]),
+                        "standard_error": float(Si[f"{kind}_se"][j]),
+                        "conf": float(Si[f"{kind}_conf"][j]),
+                    }
+                )
+
+        if Si.get("S2") is None:
+            continue
+        S2 = np.asarray(Si["S2"], dtype=float)
+        S2_se = np.asarray(Si["S2_se"], dtype=float)
+        S2_conf = np.asarray(Si["S2_conf"], dtype=float)
+        for i in range(d):
+            for j in range(i + 1, d):
+                rows.append(
+                    {
+                        "analysis": SOBOL_ANALYSIS_TAG,
+                        "objective": obj,
+                        "index": "S2",
+                        "parameter": param_names[i],
+                        "parameter_2": param_names[j],
+                        "value": float(S2[i, j]),
+                        "standard_error": float(S2_se[i, j]),
+                        "conf": float(S2_conf[i, j]),
+                    }
+                )
+
+    frame = pd.DataFrame(rows)
+    for key, value in metadata.items():
+        frame[key] = value
+    return frame
+
+
+def sobol_indices_from_dataframe(frame: pd.DataFrame) -> dict:
+    """Rebuild :func:`compute_sobol_indices` output from a saved dataframe.
+
+    The inverse of :func:`sobol_indices_to_dataframe`: returns a dict the
+    plotting functions accept unchanged.  ``S2`` is restored as the ``(d, d)``
+    matrix SALib produces, ``NaN`` everywhere but the ``i < j`` entries, and is
+    omitted entirely when the run did not compute second-order indices -- which
+    is what tells :func:`~Gene_Drive_Optimisation.plot_gene_drives.plot_outputs`
+    whether to draw the interaction grid.
+    """
+    if "analysis" not in frame.columns:
+        raise ValueError(
+            "Dataframe has no 'analysis' column; it was not written by "
+            "sobol_indices_to_dataframe()."
+        )
+    tags = set(frame["analysis"].unique())
+    if tags != {SOBOL_ANALYSIS_TAG}:
+        raise ValueError(
+            f"Expected a dataframe of {SOBOL_ANALYSIS_TAG!r} rows, found {sorted(tags)}."
+        )
+
+    objective_names = list(dict.fromkeys(frame["objective"]))
+    first = frame[(frame["objective"] == objective_names[0]) & (frame["index"] == "ST")]
+    param_names = list(dict.fromkeys(first["parameter"]))
+    position = {name: j for j, name in enumerate(param_names)}
+    d = len(param_names)
+
+    results: dict = {
+        "param_names": param_names,
+        "objective_names": objective_names,
+    }
+    for obj in objective_names:
+        rows = frame[frame["objective"] == obj]
+        Si: dict = {"param_names": param_names}
+
+        for kind in ("S1", "ST"):
+            kind_rows = rows[rows["index"] == kind]
+            where = [position[name] for name in kind_rows["parameter"]]
+            for column, key in (
+                ("value", kind),
+                ("standard_error", f"{kind}_se"),
+                ("conf", f"{kind}_conf"),
+            ):
+                values = np.full(d, np.nan)
+                values[where] = kind_rows[column].to_numpy(dtype=float)
+                Si[key] = values
+
+        pair_rows = rows[rows["index"] == "S2"]
+        if not pair_rows.empty:
+            i_idx = [position[name] for name in pair_rows["parameter"]]
+            j_idx = [position[name] for name in pair_rows["parameter_2"]]
+            for column, key in (
+                ("value", "S2"),
+                ("standard_error", "S2_se"),
+                ("conf", "S2_conf"),
+            ):
+                matrix = np.full((d, d), np.nan)
+                matrix[i_idx, j_idx] = pair_rows[column].to_numpy(dtype=float)
+                Si[key] = matrix
+
+        results[obj] = Si
+    return results
+
+
+def local_sensitivity_to_dataframe(results: dict, **metadata) -> pd.DataFrame:
+    """Flatten :func:`compute_local_sensitivity` output into a tidy dataframe.
+
+    Saved for the same reason as the Sobol indices: the finite-difference
+    stencil is ``1 + 2d`` IBM evaluations at many replicates apiece, so the
+    figure should never have to be bought twice.
+    :func:`local_sensitivity_from_dataframe` reverses it.
+
+    One row per (objective, parameter) pair holding that partial derivative,
+    alongside the point it was taken at -- ``x_star`` varies down the
+    parameters, ``y_star`` across the objectives, and ``best_idx`` records
+    which Pareto row the point came from.
+
+    Parameters
+    ----------
+    results:
+        Dict returned by :func:`compute_local_sensitivity`.
+    **metadata:
+        Scalars describing the run (step size, replicate count, release
+        thresholds, ...), written as repeated columns.
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    param_names = list(results["param_names"])
+    objective_names = list(results["objective_names"])
+    jacobian = np.asarray(results["jacobian"], dtype=float)
+    x_star = np.asarray(results["x_star"], dtype=float)
+    y_star = np.asarray(results["y_star"], dtype=float)
+
+    rows = [
+        {
+            "analysis": LOCAL_ANALYSIS_TAG,
+            "objective": obj,
+            "parameter": name,
+            "jacobian": float(jacobian[k, j]),
+            "x_star": float(x_star[j]),
+            "y_star": float(y_star[k]),
+            "best_idx": int(results["best_idx"]),
+        }
+        for k, obj in enumerate(objective_names)
+        for j, name in enumerate(param_names)
+    ]
+
+    frame = pd.DataFrame(rows)
+    for key, value in metadata.items():
+        frame[key] = value
+    return frame
+
+
+def local_sensitivity_from_dataframe(frame: pd.DataFrame) -> dict:
+    """Rebuild :func:`compute_local_sensitivity` output from a saved dataframe.
+
+    The inverse of :func:`local_sensitivity_to_dataframe`: returns a dict the
+    plotting functions accept unchanged.
+    """
+    if "analysis" not in frame.columns:
+        raise ValueError(
+            "Dataframe has no 'analysis' column; it was not written by "
+            "local_sensitivity_to_dataframe()."
+        )
+    tags = set(frame["analysis"].unique())
+    if tags != {LOCAL_ANALYSIS_TAG}:
+        raise ValueError(
+            f"Expected a dataframe of {LOCAL_ANALYSIS_TAG!r} rows, found {sorted(tags)}."
+        )
+
+    objective_names = list(dict.fromkeys(frame["objective"]))
+    param_names = list(
+        dict.fromkeys(frame[frame["objective"] == objective_names[0]]["parameter"])
+    )
+    position = {name: j for j, name in enumerate(param_names)}
+
+    jacobian = np.full((len(objective_names), len(param_names)), np.nan)
+    x_star = np.full(len(param_names), np.nan)
+    y_star = np.full(len(objective_names), np.nan)
+    for k, obj in enumerate(objective_names):
+        rows = frame[frame["objective"] == obj]
+        where = [position[name] for name in rows["parameter"]]
+        jacobian[k, where] = rows["jacobian"].to_numpy(dtype=float)
+        x_star[where] = rows["x_star"].to_numpy(dtype=float)
+        y_star[k] = float(rows["y_star"].iloc[0])
+
+    return {
+        "jacobian": jacobian,
+        "x_star": x_star,
+        "y_star": y_star,
+        "best_idx": int(frame["best_idx"].iloc[0]),
+        "param_names": param_names,
+        "objective_names": objective_names,
+    }

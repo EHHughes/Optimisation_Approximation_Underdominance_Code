@@ -34,7 +34,8 @@ All entry-point scripts are run from `src/`:
 
 ```bash
 python optimise_gene_drive.py               # multi-objective BO; --prop-gg-low / --prop-gg-high
-python sensitivity_checks.py                # Sobol, local sensitivity
+python sensitivity_checks.py                # Sobol, local sensitivity;
+                                            # --from-csv <saved results> replots without simulating
 python compare_pareto_replicates.py         # Pareto frontiers/parameters across BO replicates
 python compare_across_thresholds.py         # optimal designs across release-threshold windows
 python generate_training_data.py            # IBM input-output pairs for surrogate training

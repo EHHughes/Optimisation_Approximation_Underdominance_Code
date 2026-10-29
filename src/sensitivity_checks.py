@@ -3,6 +3,7 @@
 import argparse
 import glob
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -19,10 +20,21 @@ from Gene_Drive_Optimisation.optimise_gene_drives import (
 )
 from Gene_Drive_Optimisation.plot_gene_drives import plot_outputs
 from Gene_Drive_Optimisation.sensitivity_analysis import (
+    LOCAL_ANALYSIS_TAG,
+    SOBOL_ANALYSIS_TAG,
     compute_local_sensitivity,
     compute_sobol_indices,
+    local_sensitivity_from_dataframe,
+    local_sensitivity_to_dataframe,
+    sobol_indices_from_dataframe,
+    sobol_indices_to_dataframe,
 )
-from paths import IBM_OUTPUT_DIR, OPTIMISATION_MODELS_DIR
+from paths import (
+    IBM_OUTPUT_DIR,
+    IMAGES_DIR,
+    OPTIMISATION_MODELS_DIR,
+    sensitivity_results_path,
+)
 
 #: Fixed seed for the Sobol design's IBM evaluations.  A single seed (rather
 #: than fresh randomness) keeps the sampled response a reproducible, quasi-
@@ -137,6 +149,21 @@ def parse_args() -> argparse.Namespace:
         help=(
             "If True, only run the local sensitivity analysis and skip the Sobol "
             "analysis. Default: False"
+        ),
+    )
+    parser.add_argument(
+        "--from-csv",
+        type=Path,
+        nargs="+",
+        default=None,
+        dest="from_csv",
+        metavar="CSV",
+        help=(
+            "Redraw the figures from results saved by an earlier run instead "
+            "of evaluating the IBM at all. Pass the Sobol CSV, the local-"
+            "sensitivity CSV, or both (each file says which analysis it "
+            "holds); only the figures whose data is supplied are redrawn. "
+            "Every other argument is ignored."
         ),
     )
     parser.add_argument(
@@ -285,11 +312,133 @@ def find_best_pareto_point(
     return X, Y, Path(csv_path), row, score
 
 
+def save_sobol_indices(results: dict, args: argparse.Namespace, timestamp: str) -> Path:
+    """Write the computed Sobol indices beside the figures they produced.
+
+    The design behind them cost one IBM evaluation per point, so the numbers
+    are saved with the run settings that produced them and the figures can be
+    redrawn later with ``--from-csv``.
+    """
+    csv_path = sensitivity_results_path(
+        SOBOL_ANALYSIS_TAG, args.prop_gg_low, args.prop_gg_high, timestamp
+    )
+    sobol_indices_to_dataframe(
+        results,
+        prop_gg_low=args.prop_gg_low,
+        prop_gg_high=args.prop_gg_high,
+        n_samples=args.sobol_samples,
+        n_replicates=args.sobol_replicates,
+        second_order=not args.no_second_order,
+        ibm_seed=_SOBOL_IBM_SEED,
+    ).to_csv(csv_path, index=False)
+    return csv_path
+
+
+def save_local_sensitivity(
+    results: dict, args: argparse.Namespace, timestamp: str
+) -> Path:
+    """Write the finite-difference Jacobian beside the figure it produced."""
+    csv_path = sensitivity_results_path(
+        LOCAL_ANALYSIS_TAG, args.prop_gg_low, args.prop_gg_high, timestamp
+    )
+    local_sensitivity_to_dataframe(
+        results,
+        prop_gg_low=args.prop_gg_low,
+        prop_gg_high=args.prop_gg_high,
+        step=args.fd_step,
+        n_replicates=args.fd_replicates,
+    ).to_csv(csv_path, index=False)
+    return csv_path
+
+
+def threshold_tags_from_results(csv_path: Path, frame: pd.DataFrame) -> tuple[str, str]:
+    """Recover the ``low``/``high`` filename tags a saved result belongs to.
+
+    Taken from the metadata columns the analysis wrote, falling back to the
+    threshold directory the file sits in.  The tags decide the figure
+    filenames, so a replot has to land on the same pair the run did.
+    """
+    if {"prop_gg_low", "prop_gg_high"} <= set(frame.columns):
+        low = float(frame["prop_gg_low"].iloc[0])
+        high = float(frame["prop_gg_high"].iloc[0])
+        return f"{low:.2f}".replace(".", "p"), f"{high:.2f}".replace(".", "p")
+
+    match = _DIR_RE.match(csv_path.parent.name)
+    if match:
+        return match.group(1), match.group(2)
+    raise ValueError(
+        f"Cannot tell which release thresholds {csv_path} belongs to: it has no "
+        "prop_gg_low/prop_gg_high columns and does not sit in a low*_high* "
+        "directory."
+    )
+
+
+def replot_from_csv(csv_paths: list[Path]) -> None:
+    """Redraw the sensitivity figures from saved results, simulating nothing.
+
+    Each file names its own analysis in its ``analysis`` column, so the Sobol
+    and local-sensitivity CSVs can be passed in either order, or one alone --
+    only the figures whose data is supplied are redrawn.  Every file must
+    describe the same threshold pair, since all of them share one set of
+    figure filenames.
+    """
+    results: dict[str, dict] = {}
+    tags: set[tuple[str, str]] = set()
+
+    for csv_path in csv_paths:
+        frame = pd.read_csv(csv_path)
+        if "analysis" not in frame.columns:
+            raise ValueError(
+                f"{csv_path} has no 'analysis' column; it was not written by a "
+                "sensitivity run."
+            )
+        tag = str(frame["analysis"].iloc[0])
+        if tag not in (SOBOL_ANALYSIS_TAG, LOCAL_ANALYSIS_TAG):
+            raise ValueError(
+                f"{csv_path} holds unknown results {tag!r}; expected "
+                f"{SOBOL_ANALYSIS_TAG!r} or {LOCAL_ANALYSIS_TAG!r}."
+            )
+        if (
+            tag in results
+        ):  # triggers if, as you loop over the csv's passed in, one of them is a duplicate of a previous one
+            raise ValueError(f"Two {tag!r} files passed; pass at most one of each.")
+
+        results[tag] = (
+            sobol_indices_from_dataframe(frame)
+            if tag == SOBOL_ANALYSIS_TAG
+            else local_sensitivity_from_dataframe(frame)
+        )
+        tags.add(threshold_tags_from_results(csv_path, frame))
+        print(f"Loaded {tag} from {csv_path} ({len(frame)} rows).")
+
+    if len(tags) > 1:
+        raise ValueError(
+            "The files passed describe different threshold pairs "
+            f"({sorted(tags)}); they would overwrite one another's figures."
+        )
+
+    (low_tag, high_tag) = tags.pop()
+    plot_outputs(
+        sobol_results=results.get(SOBOL_ANALYSIS_TAG),
+        local_sensitivity_results=results.get(LOCAL_ANALYSIS_TAG),
+        filename_suffix=f"_low{low_tag}_high{high_tag}",
+    )
+    print(f"Redrew figures for low{low_tag}/high{high_tag} in {IMAGES_DIR}.")
+
+
 if __name__ == "__main__":
     args = parse_args()
 
+    if args.from_csv is not None:
+        replot_from_csv(args.from_csv)
+        raise SystemExit(0)
+
     low_tag = f"{args.prop_gg_low:.2f}".replace(".", "p")
     high_tag = f"{args.prop_gg_high:.2f}".replace(".", "p")
+
+    # One timestamp for the whole run, so the analyses it saves stay a matched
+    # set rather than two files a second apart.
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if args.local_only:
         print(
@@ -361,9 +510,15 @@ if __name__ == "__main__":
             pareto_Y=best_point_Y,
             step=args.fd_step,
         )
+        local_csv = save_local_sensitivity(
+            local_sensitivity_results, args, run_timestamp
+        )
+        print(f"Saved local sensitivity results to {local_csv}")
+
         plot_outputs(
             local_sensitivity_results=local_sensitivity_results,
         )
+        print(f"Redraw this figure without re-running with:  --from-csv {local_csv}")
     else:
         n_dims = best_point_X.shape[1]
         n_design = args.sobol_samples * (
@@ -400,8 +555,19 @@ if __name__ == "__main__":
         # model_id = f"low{low_tag}_high{high_tag}_{run_ts}"
         model_id = f"low{low_tag}_high{high_tag}"
 
+        sobol_csv = save_sobol_indices(sobol_results, args, run_timestamp)
+        print(f"Saved Sobol indices to {sobol_csv}")
+        local_csv = save_local_sensitivity(
+            local_sensitivity_results, args, run_timestamp
+        )
+        print(f"Saved local sensitivity results to {local_csv}")
+
         plot_outputs(
             sobol_results=sobol_results,
             local_sensitivity_results=local_sensitivity_results,
             filename_suffix=f"_{model_id}",
+        )
+        print(
+            "Redraw these figures without re-running with:  "
+            f"--from-csv {sobol_csv} {local_csv}"
         )

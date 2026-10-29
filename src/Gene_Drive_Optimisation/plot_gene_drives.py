@@ -561,7 +561,7 @@ def plot_sobol_indices(
     ax.set_xlim(x_pos[0] - 0.6, x_pos[-1] + 0.6)
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=12)
-    ax.set_ylabel(r"Total-effect Sobol index $S_{Ti}$", fontsize=13)
+    ax.set_ylabel(r"Total-effect Sobol' index $S_{Ti}$", fontsize=13)
     ax.set_ylim(bottom=0)
     ax.tick_params(labelsize=11)
     ax.legend(
@@ -1014,7 +1014,7 @@ def plot_best_parameters_across_thresholds(
 
     n = len(entries)
     x = np.arange(n)
-    x_labels = [f"({e['low']:.2g}, {e['high']:.2g})" for e in entries]
+    x_labels = [rf"${0.5 * (e['low'] + e['high']):.2g}$" for e in entries]
     f1_arr = np.array([e["f1"] for e in entries])
     f2_arr = np.array([e["f2"] for e in entries])
     f1_ci = np.array([e["f1_err"] for e in entries])
@@ -1048,7 +1048,10 @@ def plot_best_parameters_across_thresholds(
     # ── Parameter panel ──────────────────────────────────────────────────────
     for thresh_idx, (entry, colour) in enumerate(zip(entries, colours)):
         offset = (thresh_idx - (n - 1) / 2.0) * bar_width
-        label = f"({entry['low']:.2g}, {entry['high']:.2g}),  " + ",  ".join(
+        # Report the target threshold the window brackets, rather than the
+        # window's end points: one number reads more clearly in the legend.
+        tau = 0.5 * (entry["low"] + entry["high"])
+        label = rf"$\tau={tau:.2g}$,  " + ",  ".join(
             f"{lbl}={val:.3f}"
             for lbl, val in zip(_short_obj, [entry["f1"], entry["f2"]])
         )
@@ -1092,9 +1095,9 @@ def plot_best_parameters_across_thresholds(
     ax_params.set_ylim(0, 1)
     ax_params.tick_params(labelsize=11)
     legend_title = (
-        r"Threshold (low, high),  best verified objectives"
+        r"Target threshold $\tau$,  best verified objectives"
         if top_n == 1
-        else rf"Threshold (low, high),  top-{top_n} mean objectives"
+        else rf"Target threshold $\tau$,  top-{top_n} mean objectives"
     )
     ax_params.legend(
         fontsize=9,
@@ -1134,14 +1137,15 @@ def plot_best_parameters_across_thresholds(
         )
         ax_obj.set_xticks(x)
         ax_obj.set_xticklabels(x_labels, fontsize=11)
-        ax_obj.set_xlabel(r"Release threshold (low, high)", fontsize=13)
+        ax_obj.set_xlabel(r"Target threshold $\tau$", fontsize=13)
         ax_obj.set_ylabel("Verified objective", fontsize=13)
         ax_obj.set_ylim(0, 1.15)
         ax_obj.tick_params(labelsize=11)
         ax_obj.legend(
             fontsize=11,
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.21),
+            # Clear of the x-axis label, which sits directly above it.
+            bbox_to_anchor=(0.5, -0.30),
             borderaxespad=0,
             ncols=2,
             frameon=False,

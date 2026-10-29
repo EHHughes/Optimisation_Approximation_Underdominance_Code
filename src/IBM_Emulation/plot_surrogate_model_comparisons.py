@@ -14,6 +14,8 @@ def _lighten(color, amount: float = 0.55):
     """Blend *color* towards white by *amount* (0 = unchanged, 1 = white)."""
     r, g, b = to_rgb(color)
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
 from IBM_Implementations.input_output_pairs import (
     breed_adults_to_eggs,
     generate_pairs_from_fixed_adults,
@@ -93,7 +95,7 @@ def compare_ibm_to_neural_net(
     with torch.no_grad():
         nn_pred = net(x).squeeze().numpy() * scalings[1]
 
-    nn_label = "NN (adults$\\to$adults)"
+    nn_label = "NN"
 
     nn_pred_by_genotype = {
         "WW": nn_pred[0],
@@ -253,10 +255,7 @@ def compare_ibm_to_maf(
     # approx mean. The zero vector starts in the flow's own latent space, so it
     # is as wide as the flow's features, not always three.
     maf_mean = (
-        flow(context)
-        .transform.inv(torch.zeros(context.shape[-1]))
-        .detach()
-        .numpy()
+        flow(context).transform.inv(torch.zeros(context.shape[-1])).detach().numpy()
         * scalings[1]
     )
     if homozygotes_only:
@@ -506,7 +505,7 @@ def compare_multigeneration_ibm_to_nn(
             with torch.no_grad():
                 adults = scalings[1] * net(x).detach().numpy()
             surrogate_traj[g + 1] = adults
-        surrogate_label = "NN (adults$\\to$adults)"
+        surrogate_label = "NN"
 
     else:  # maf
         flow, scalings = load_pretrained_maf(
@@ -530,7 +529,7 @@ def compare_multigeneration_ibm_to_nn(
                 )
                 maf_trajs[traj_idx, g + 1] = traj_adults
         surrogate_traj = maf_trajs.mean(axis=0)  # (n_generations+1, 3)
-        surrogate_label = f"MAF mean ($n={n_replicates}$ trajectories)"
+        surrogate_label = f"NSF mean ($n={n_replicates}$ trajectories)"
 
     # --- Plot -----------------------------------------------------------
     # The WG panel is dropped by default: heterozygotes are non-viable under
@@ -623,7 +622,7 @@ def compare_multigeneration_ibm_to_nn(
                         alpha=0.9,
                         linewidth=1.0,
                         linestyle="--",
-                        label="MAF replicate" if r == 0 else None,
+                        label="NSF replicate" if r == 0 else None,
                     )
             ax.plot(
                 generations,
@@ -665,13 +664,23 @@ def compare_multigeneration_ibm_to_nn(
         if model_type == "maf":
             style_handles.append(
                 mlines.Line2D(
-                    [], [], color="0.6", alpha=0.9, linewidth=1.0, linestyle="--",
-                    label="MAF replicate",
+                    [],
+                    [],
+                    color="0.6",
+                    alpha=0.9,
+                    linewidth=1.0,
+                    linestyle="--",
+                    label="NSF replicate",
                 )
             )
         style_handles.append(
             mlines.Line2D(
-                [], [], color="k", linewidth=2.0, linestyle="--", label=surrogate_label,
+                [],
+                [],
+                color="k",
+                linewidth=2.0,
+                linestyle="--",
+                label=surrogate_label,
             )
         )
         fig.legend(

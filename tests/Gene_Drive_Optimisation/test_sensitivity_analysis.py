@@ -26,12 +26,20 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from torch import Tensor
 
 from Gene_Drive_Optimisation.optimise_gene_drives import _fit_model, validate_surrogate
-from Gene_Drive_Optimisation.sensitivity_analysis import compute_local_sensitivity, compute_sobol_indices
+from Gene_Drive_Optimisation.sensitivity_analysis import (
+    compute_local_sensitivity,
+    compute_sobol_indices,
+    local_sensitivity_from_dataframe,
+    local_sensitivity_to_dataframe,
+    sobol_indices_from_dataframe,
+    sobol_indices_to_dataframe,
+)
 
 # ---------------------------------------------------------------------------
 # Shared ground-truth linear model
@@ -525,3 +533,133 @@ class TestLocalSensitivityAtBounds:
             step=self._STEP,
         )
         assert np.all(np.isfinite(results["jacobian"])), results["jacobian"]
+
+
+class TestResultSerialisation:
+    """Saved results reload into exactly the dicts the plotting code expects.
+
+    A Sobol run costs one IBM evaluation per design point, so its indices are
+    written to CSV and the figures redrawn from the file rather than re-earned
+    (``sensitivity_checks.py --from-csv``).  That is only safe if the round
+    trip is lossless, which is what these tests pin down.
+    """
+
+    _N_SAMPLES = 64  # only the round trip is under test, not the estimates
+    _SEED = 11
+
+    @pytest.fixture(scope="class")
+    def sobol_results(self):
+        return compute_sobol_indices(
+            _linear,
+            bounds=_BOUNDS,
+            n_samples=self._N_SAMPLES,
+            param_names=_PARAM_NAMES_3D,
+            objective_names=_OBJ_NAMES_3D,
+            calc_second_order=True,
+            seed=self._SEED,
+        )
+
+    @pytest.fixture(scope="class")
+    def local_results(self):
+        rng = torch.Generator().manual_seed(self._SEED)
+        X = torch.rand(3, 3, dtype=torch.double, generator=rng)
+        return compute_local_sensitivity(
+            _linear,
+            X,
+            _linear(X),
+            bounds=_BOUNDS,
+            param_names=_PARAM_NAMES_3D,
+            objective_names=_OBJ_NAMES_3D,
+        )
+
+    # --- Sobol indices ----------------------------------------------------
+
+    def test_sobol_round_trip_preserves_every_index(self, sobol_results):
+        frame = sobol_indices_to_dataframe(sobol_results)
+        restored = sobol_indices_from_dataframe(frame)
+
+        assert restored["param_names"] == _PARAM_NAMES_3D
+        assert restored["objective_names"] == _OBJ_NAMES_3D
+        for obj in _OBJ_NAMES_3D:
+            for key in ("S1", "S1_se", "S1_conf", "ST", "ST_se", "ST_conf"):
+                np.testing.assert_allclose(restored[obj][key], sobol_results[obj][key])
+
+    def test_sobol_round_trip_preserves_the_interaction_matrix(self, sobol_results):
+        """``S2`` comes back as SALib's upper-triangular matrix, NaNs and all."""
+        restored = sobol_indices_from_dataframe(
+            sobol_indices_to_dataframe(sobol_results)
+        )
+        for obj in _OBJ_NAMES_3D:
+            for key in ("S2", "S2_se", "S2_conf"):
+                np.testing.assert_allclose(
+                    restored[obj][key], sobol_results[obj][key]
+                )
+            lower = np.tril_indices(len(_PARAM_NAMES_3D))
+            assert np.all(np.isnan(restored[obj]["S2"][lower]))
+
+    def test_first_order_only_run_restores_without_an_s2_key(self):
+        """No ``S2`` key is what tells plot_outputs to skip the interaction grid."""
+        results = compute_sobol_indices(
+            _linear,
+            bounds=_BOUNDS,
+            n_samples=self._N_SAMPLES,
+            param_names=_PARAM_NAMES_3D,
+            objective_names=_OBJ_NAMES_3D,
+            calc_second_order=False,
+            seed=self._SEED,
+        )
+        restored = sobol_indices_from_dataframe(sobol_indices_to_dataframe(results))
+        for obj in _OBJ_NAMES_3D:
+            assert restored[obj].get("S2") is None
+
+    def test_metadata_is_written_as_repeated_columns(self, sobol_results):
+        frame = sobol_indices_to_dataframe(
+            sobol_results, prop_gg_low=0.3, prop_gg_high=0.5, n_samples=64
+        )
+        assert (frame["prop_gg_low"] == 0.3).all()
+        assert (frame["prop_gg_high"] == 0.5).all()
+        assert (frame["n_samples"] == 64).all()
+
+    def test_sobol_survives_a_real_csv(self, sobol_results, tmp_path):
+        """Via the file itself, so dtypes and the empty ``parameter_2`` round trip."""
+        csv_path = tmp_path / "sobol.csv"
+        sobol_indices_to_dataframe(sobol_results).to_csv(csv_path, index=False)
+        restored = sobol_indices_from_dataframe(pd.read_csv(csv_path))
+        for obj in _OBJ_NAMES_3D:
+            np.testing.assert_allclose(restored[obj]["ST"], sobol_results[obj]["ST"])
+            np.testing.assert_allclose(restored[obj]["S2"], sobol_results[obj]["S2"])
+
+    def test_local_results_are_rejected_by_the_sobol_reader(self, local_results):
+        frame = local_sensitivity_to_dataframe(local_results)
+        with pytest.raises(ValueError, match="sobol_indices"):
+            sobol_indices_from_dataframe(frame)
+
+    # --- local sensitivity ------------------------------------------------
+
+    def test_local_round_trip_preserves_the_jacobian_and_its_point(
+        self, local_results
+    ):
+        frame = local_sensitivity_to_dataframe(local_results)
+        restored = local_sensitivity_from_dataframe(frame)
+
+        for key in ("jacobian", "x_star", "y_star"):
+            np.testing.assert_allclose(restored[key], local_results[key])
+        assert restored["best_idx"] == local_results["best_idx"]
+        assert restored["param_names"] == _PARAM_NAMES_3D
+        assert restored["objective_names"] == _OBJ_NAMES_3D
+
+    def test_local_survives_a_real_csv(self, local_results, tmp_path):
+        csv_path = tmp_path / "local.csv"
+        local_sensitivity_to_dataframe(local_results).to_csv(csv_path, index=False)
+        restored = local_sensitivity_from_dataframe(pd.read_csv(csv_path))
+        np.testing.assert_allclose(restored["jacobian"], local_results["jacobian"])
+
+    def test_sobol_results_are_rejected_by_the_local_reader(self, sobol_results):
+        frame = sobol_indices_to_dataframe(sobol_results)
+        with pytest.raises(ValueError, match="local_sensitivity"):
+            local_sensitivity_from_dataframe(frame)
+
+    def test_a_table_without_the_analysis_marker_is_rejected(self, sobol_results):
+        frame = sobol_indices_to_dataframe(sobol_results).drop(columns=["analysis"])
+        with pytest.raises(ValueError, match="analysis"):
+            sobol_indices_from_dataframe(frame)

@@ -5,6 +5,7 @@ so that output locations are consistent regardless of the working directory from
 which scripts are invoked.
 """
 
+from datetime import datetime
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # repository root
@@ -105,3 +106,47 @@ def single_location_release_path(
     return (
         SINGLE_LOCATION_RELEASE_DIR / f"single_location_release{params}_seed={seed}.csv"
     )
+
+
+def sensitivity_results_path(
+    analysis: str,
+    prop_gg_low: float,
+    prop_gg_high: float,
+    timestamp: str | None = None,
+) -> Path:
+    """Path a sensitivity analysis writes its computed indices to.
+
+    ``sensitivity_checks.py`` evaluates the IBM at every point of a Sobol
+    design -- ``N * (2d + 2)`` points, each a multi-cycle simulation at two
+    release fractions -- so a publication-sized run is hours to days of
+    compute, and the finite-difference analysis beside it is not cheap either.
+    Both therefore write their results here, and the script can redraw the
+    figures from the file (``--from-csv``) without simulating anything: a typo
+    in an axis label should never cost a re-run.
+
+    The file lands next to the Pareto frontiers of the same threshold pair, so
+    everything belonging to one optimisation problem stays in one directory.
+
+    Parameters
+    ----------
+    analysis : str
+        Which analysis the file holds -- ``"sobol_indices"`` or
+        ``"local_sensitivity"`` (the ``*_ANALYSIS_TAG`` constants in
+        ``Gene_Drive_Optimisation.sensitivity_analysis``).  The two produce
+        different tables from a single run, so they get a file each.
+    prop_gg_low, prop_gg_high : float
+        The release fractions of the two objectives, encoded in the directory
+        name exactly as the Pareto-frontier CSVs encode them.
+    timestamp : str | None
+        Disambiguates repeated analyses of the same threshold pair; generated
+        from the current local time when omitted.  Without it a re-run would
+        silently overwrite the results behind an existing figure.
+    """
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    low_tag = f"{prop_gg_low:.2f}".replace(".", "p")
+    high_tag = f"{prop_gg_high:.2f}".replace(".", "p")
+    threshold_dir = IBM_OUTPUT_DIR / f"low{low_tag}_high{high_tag}"
+    threshold_dir.mkdir(parents=True, exist_ok=True)
+    return threshold_dir / f"gene_drive_{analysis}_{timestamp}.csv"
