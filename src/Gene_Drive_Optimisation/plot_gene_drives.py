@@ -57,6 +57,15 @@ _LATEX_RC: dict = {
     **plot_style.OPEN_SPINES_RC,
 }
 
+#: Figure size for the objective-space Pareto-frontier figure.  The paper
+#: embeds it at ``0.6\textwidth`` (``\textwidth`` is 6.0 in, so 3.6 in on the
+#: page), and matplotlib's point sizes are only preserved through that
+#: scaling if the figure is drawn at close to its printed size: at 4.2 in
+#: wide the 13 pt axis labels land at ~11 pt on paper, which is where the
+#: old 7.0 in figure put them when it was embedded at full ``\textwidth``.
+#: The 7:5.5 aspect ratio of that figure is kept.
+_FRONTIER_FIGSIZE: tuple[float, float] = (4.2, 3.3)
+
 _OBJ_LATEX: list[str] = [
     r"$f_{\mathrm{extinction}}$",
     r"$f_{\mathrm{fixation}}$",
@@ -1472,7 +1481,7 @@ def plot_pareto_replicates(
     use_verified: bool = True,
     show_error_bars: bool = True,
     show_replicate_labels: bool = False,
-    figsize: tuple[float, float] = (7.0, 5.5),
+    figsize: tuple[float, float] = _FRONTIER_FIGSIZE,
     title: str | None = None,
     save: bool = True,
 ) -> "matplotlib.figure.Figure":
@@ -1503,7 +1512,9 @@ def plot_pareto_replicates(
         tags clutter a paper figure but are useful for replicability and
         validation when comparing runs.
     figsize:
-        Figure size in inches.  Defaults to ``(7.0, 5.5)``.
+        Figure size in inches.  Defaults to :data:`_FRONTIER_FIGSIZE`, sized so
+        the figure prints at ``0.6\\textwidth`` with the house font sizes
+        landing just above the 10 pt body text (see that constant).
     title:
         Optional super-title.
     save:
@@ -1531,12 +1542,16 @@ def plot_pareto_replicates(
         # The palest end of the ordered ramp needs a little more ink than the
         # old equal-luminance palette did to stay legible against white: hence
         # the heavier line, the less transparent whiskers, and black (rather
-        # than white) marker rings.
+        # than white) marker rings.  The sizes below are then trimmed back a
+        # little from what a full-width figure carried: at _FRONTIER_FIGSIZE
+        # the axes hold the same points in 0.6 of the width, so markers and
+        # strokes at their old point sizes would crowd the dense right-hand
+        # end of the frontiers.  Fonts are deliberately *not* trimmed.
         ax_obj.plot(
             Ys[:, 0],
             Ys[:, 1],
             color=colour,
-            linewidth=1.8,
+            linewidth=1.4,
             alpha=0.7,
             zorder=2,
         )
@@ -1550,16 +1565,16 @@ def plot_pareto_replicates(
                 fmt="none",
                 color=colour,
                 alpha=0.55,
-                linewidth=1.0,
+                linewidth=0.8,
                 zorder=1,
             )
         ax_obj.scatter(
             Ys[:, 0],
             Ys[:, 1],
             color=colour,
-            s=45,
+            s=30,
             alpha=0.9,
-            linewidths=0.5,
+            linewidths=0.45,
             edgecolors="black",
             zorder=3,
             label=rep["label"] if show_replicate_labels else None,
