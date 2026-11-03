@@ -48,6 +48,23 @@ HOUSE_RC: dict = {
     **OPEN_SPINES_RC,
 }
 
+#: Font-size overrides for a figure laid out as a single wide row of panels
+#: (the three-panel surrogate figures: WW / GG / Total).  Such a figure is
+#: reproduced at full text width, so each panel lands at roughly a third of the
+#: page and the house sizes come out small on paper; every size is raised ~2pt
+#: so the labels stay readable in print.  Merge over whichever base rc the
+#: figure already uses, e.g.
+#: ``plt.rc_context({**plot_style.HOUSE_RC, **plot_style.WIDE_ROW_FONT_RC})``.
+WIDE_ROW_FONT_RC: dict = {
+    "font.size": 15,
+    "axes.titlesize": 15,
+    "axes.labelsize": 15,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13,
+    "legend.fontsize": 13,
+    "figure.titlesize": 16,
+}
+
 #: Genotype palette (WW blue, WG amber, GG magenta) shared with the spatial plots.
 GENOTYPE_COLORS: dict = {
     "WW": "#0C7BDC",

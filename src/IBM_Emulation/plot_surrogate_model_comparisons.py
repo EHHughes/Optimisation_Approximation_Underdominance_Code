@@ -555,6 +555,12 @@ def compare_multigeneration_ibm_to_nn(
     ibm_total = ibm_traj.sum(axis=2)  # (n_replicates, n_generations+1)
     surrogate_total = surrogate_traj.sum(axis=1)  # (n_generations+1,)
 
+    # One row per figure unless the legacy four-panel thesis layout is asked
+    # for, which stays 2x2.  Decided before the rc is built: the single row
+    # prints each panel at a third of the page width and so needs the larger
+    # wide-row font sizes.
+    single_row = for_conference or drop_heterozygotes
+
     # Conference figures follow the shared house style (usetex Computer Modern);
     # the plain (thesis-inline) path keeps the lighter rc overrides.
     rc = (
@@ -570,10 +576,9 @@ def compare_multigeneration_ibm_to_nn(
             "figure.titlesize": 14,
         }
     )
+    if single_row:
+        rc = {**rc, **plot_style.WIDE_ROW_FONT_RC}
     with plt.rc_context(rc):
-        # One row per figure unless the legacy four-panel thesis layout is
-        # asked for, which stays 2x2.
-        single_row = for_conference or drop_heterozygotes
         if single_row:
             n_panels = len(genotypes)
             width = 4.0 * n_panels if for_conference else 4.5 * n_panels

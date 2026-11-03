@@ -405,22 +405,27 @@ def plot_test_set_predictions(
         outputs_np = outputs_np[::subsample]
         predicted_y = predicted_y[::subsample]
 
-    with plt.rc_context(
-        {
-            "font.size": 13,
-            "axes.titlesize": 13,
-            "axes.labelsize": 13,
-            "xtick.labelsize": 11,
-            "ytick.labelsize": 11,
-            "legend.fontsize": 12,
-            "figure.titlesize": 14,
-            # Stated here as well as in the module-level rcParams so the figure
-            # gets the house spine convention regardless of import order.
-            **plot_style.OPEN_SPINES_RC,
-        }
-    ):
-        # A single row unless the legacy four-panel paper layout is asked for.
-        single_row = conference or drop_heterozygotes
+    # A single row unless the legacy four-panel paper layout is asked for.
+    # Decided before the rc is built: the single row prints each panel at a
+    # third of the page width and so needs the larger wide-row font sizes.
+    single_row = conference or drop_heterozygotes
+
+    rc = {
+        "font.size": 13,
+        "axes.titlesize": 13,
+        "axes.labelsize": 13,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 12,
+        "figure.titlesize": 14,
+        # Stated here as well as in the module-level rcParams so the figure
+        # gets the house spine convention regardless of import order.
+        **plot_style.OPEN_SPINES_RC,
+    }
+    if single_row:
+        rc = {**rc, **plot_style.WIDE_ROW_FONT_RC}
+
+    with plt.rc_context(rc):
         n_panels = len(genotype_labels) + 1  # the genotypes, plus Total
         if single_row:
             width = (5.0 if conference else 4.5) * n_panels
